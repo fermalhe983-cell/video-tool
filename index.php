@@ -1,12 +1,12 @@
 <?php
 // ==========================================
-// REELS VIRAL MAKER v7.0 (Psychology Edition)
+// VIRAL REELS MAKER v8.0 (Universal Fix + NeuroMarketing)
 // ==========================================
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 0);
 ini_set('memory_limit', '1024M');
 
-// 1. CONFIGURACIÓN DE RUTAS
+// DIRECTORIOS
 $baseDir = __DIR__ . '/';
 $uploadDir = $baseDir . 'uploads/';
 $processedDir = $baseDir . 'processed/';
@@ -14,7 +14,7 @@ $jobsDir = $baseDir . 'jobs/';
 $logoPath = $baseDir . 'logo.png'; 
 $fontPath = $baseDir . 'font.ttf'; 
 
-// Crear carpetas con permisos full
+// Crear carpetas
 if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); chmod($uploadDir, 0777); }
 if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); chmod($processedDir, 0777); }
 if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777); }
@@ -22,57 +22,57 @@ if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777)
 $hasLogo = file_exists($logoPath);
 $hasFont = file_exists($fontPath);
 
-// 2. GARBAGE COLLECTOR (Limpieza Automática)
+// AUTO-LIMPIEZA (Borra basura de hace 20 mins)
 function limpiarBasura($dir) {
     if (!is_dir($dir)) return;
     $files = glob($dir . '*');
     $now = time();
     foreach ($files as $file) {
-        if (is_file($file) && ($now - filemtime($file) >= 1200)) { // 20 mins
-            @unlink($file);
-        }
+        if (is_file($file) && ($now - filemtime($file) >= 1200)) @unlink($file);
     }
 }
 limpiarBasura($uploadDir);
 limpiarBasura($processedDir);
 limpiarBasura($jobsDir);
 
-// 3. LÓGICA DEL BACKEND
 $action = $_GET['action'] ?? '';
 
-// ---> DESCARGAR Y ELIMINAR
+// ---> DESCARGA SEGURA
 if ($action === 'download' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = $processedDir . $file;
     if (file_exists($filePath)) {
+        // Headers universales para MP4
         header('Content-Description: File Transfer');
-        header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="VIRAL_HOOK_'.date('YmdHis').'.mp4"');
+        header('Content-Type: video/mp4');
+        header('Content-Disposition: attachment; filename="VIRAL_'.date('His').'.mp4"');
         header('Content-Length: ' . filesize($filePath));
+        header('Pragma: public');
+        ob_clean();
+        flush();
         readfile($filePath);
-        @unlink($filePath); // Borrar video
+        // Borrar después de enviar
+        @unlink($filePath);
         $jobId = str_replace('_reel.mp4', '', $file);
-        @unlink($jobsDir . $jobId . '.json'); // Borrar registro
+        @unlink($jobsDir . $jobId . '.json');
         exit;
-    } else { die("El video ya fue descargado o expiró."); }
+    } else { die("El archivo ya no existe (fue borrado por seguridad)."); }
 }
 
-// ---> SUBIR Y PROCESAR
+// ---> SUBIDA Y PROCESAMIENTO
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
-        echo json_encode(['status' => 'error', 'message' => 'Error en archivo.']); exit;
+        echo json_encode(['status' => 'error', 'message' => 'Error al subir.']); exit;
     }
 
+    // PSICOLOGÍA: Títulos cortos (Max 40 chars) y MAYÚSCULAS para urgencia
     $rawTitle = $_POST['videoTitle'] ?? '';
-    // TRUCO PSICOLÓGICO: Forzar MAYÚSCULAS (Impacto visual)
     $cleanTitle = mb_strtoupper(str_replace(["'", "\"", "\\", ":"], "", $rawTitle), 'UTF-8');
-    // Limitamos a 35 caracteres. Títulos largos NO son virales. 
-    // "MENOS ES MÁS" en redes sociales.
-    $cleanTitle = mb_substr($cleanTitle, 0, 35); 
+    $cleanTitle = mb_substr($cleanTitle, 0, 40); 
 
     $file = $_FILES['videoFile'];
-    $jobId = uniqid('v7');
+    $jobId = uniqid('v8');
     $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
     $inputFilename = $jobId . '_i.' . $ext;
     $outputFilename = $jobId . '_reel.mp4';
@@ -87,51 +87,46 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $inputs = "-i " . escapeshellarg($targetPath);
         if ($hasLogo) $inputs .= " -i " . escapeshellarg($logoPath);
 
-        // --- FILTROS FFMPEG (La Magia) ---
+        // --- FILTROS DE INGENIERÍA VIRAL ---
         $filter = "";
         
-        // A. FONDO (Blur oscuro para resaltar texto)
+        // 1. BASE: Crear canvas 1080x1920 (Blur de fondo)
         $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10,colorlevels=rimax=0.5:gimax=0.5:bimax=0.5[bg];";
         
-        // B. VIDEO PRINCIPAL (Centrado)
+        // 2. VIDEO: Escalar video principal para que quepa sin cortarse
         $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];";
+        
+        // 3. COMPOSICIÓN: Poner video sobre fondo blur
         $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
         $lastStream = "[base]";
 
-        // C. BARRA DE IMPACTO (Header)
-        // Aumentamos altura a 220px para que el texto respire y sea MASIVO.
-        // Opacidad 0.85 (casi sólido) para lectura perfecta.
-        $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h=220:color=black@0.85:t=fill[with_bar];";
+        // 4. HEADER NEGRO (Zona de Titular) - Aumentada a 240px para impacto
+        $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h=240:color=black@0.9:t=fill[with_bar];";
         $lastStream = "[with_bar]";
 
-        // D. LOGO (Marca Personal)
+        // 5. LOGO (Izquierda)
         if ($hasLogo) {
-            // Logo más grande (160px) alineado a la izquierda
             $filter .= "[1:v]scale=-1:160[logo_scaled];";
-            $filter .= "{$lastStream}[logo_scaled]overlay=40:90[watermarked];";
+            $filter .= "{$lastStream}[logo_scaled]overlay=40:100[watermarked];";
             $lastStream = "[watermarked]";
         }
 
-        // E. TÍTULO VIRAL (El Gancho)
+        // 6. TÍTULO (Amarillo + Borde Negro + Fuente Impacto)
+        // Posición y=135: Centro óptico de la barra negra
         if ($hasFont && !empty($cleanTitle)) {
             $fontFileSafe = str_replace('\\', '/', $fontPath);
-            // fontsize=95: GIGANTE.
-            // fontcolor=yellow: El color que más rápido procesa el ojo humano.
-            // borderw=5: Borde negro sólido para contraste.
-            // y=120: Centrado verticalmente en la barra nueva de 220px.
-            // x=(w-text_w)/2 + 70: Desplazado a la derecha para dejar sitio al logo.
-            
-            $drawText = "drawtext=fontfile='$fontFileSafe':text='$cleanTitle':fontcolor=#FFFF00:fontsize=95:borderw=5:bordercolor=black:x=(w-text_w)/2+80:y=120";
-            
+            $drawText = "drawtext=fontfile='$fontFileSafe':text='$cleanTitle':fontcolor=#FFD700:fontsize=90:borderw=4:bordercolor=black:x=(w-text_w)/2+80:y=135";
             $filter .= "{$lastStream}{$drawText}[titled];";
             $lastStream = "[titled]";
         }
 
-        // F. ACELERACIÓN (Retención de audiencia)
-        $filter .= "{$lastStream}setpts=0.92*PTS[v_final];[0:a]atempo=1.086[a_final]";
+        // 7. ACELERACIÓN (1.06x) - Imperceptible pero aumenta retención
+        $filter .= "{$lastStream}setpts=0.94*PTS[v_final];[0:a]atempo=1.0638[a_final]";
 
-        // EJECUCIÓN
-        $ffmpegCmd = "nice -n 19 ffmpeg $inputs -threads 2 -filter_complex \"$filter\" -map \"[v_final]\" -map \"[a_final]\" -map_metadata -1 -c:v libx264 -preset veryfast -crf 23 -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputPath) . " > /dev/null 2>&1 &";
+        // --- COMANDO DE EXPORTACIÓN (FIX PANTALLA NEGRA) ---
+        // -pix_fmt yuv420p: CLAVE para que se vea en todos los dispositivos
+        // -movflags +faststart: CLAVE para que empiece a reproducir de inmediato
+        $ffmpegCmd = "nice -n 19 ffmpeg $inputs -threads 2 -filter_complex \"$filter\" -map \"[v_final]\" -map \"[a_final]\" -map_metadata -1 -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputPath) . " > /dev/null 2>&1 &";
 
         exec("nohup $ffmpegCmd");
 
@@ -141,7 +136,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// ---> ESTADO DEL PROCESO
+// ---> ESTADO
 if ($action === 'status' && isset($_GET['jobId'])) {
     header('Content-Type: application/json');
     $jobId = preg_replace('/[^a-z0-9_]/i', '', $_GET['jobId']);
@@ -151,13 +146,12 @@ if ($action === 'status' && isset($_GET['jobId'])) {
 
     if ($jobData['status'] === 'processing') {
         $realPath = $processedDir . $jobData['filename'];
-        if (file_exists($realPath) && filesize($realPath) > 51200) {
-            chmod($realPath, 0777); // Fix para que el navegador pueda leerlo
+        if (file_exists($realPath) && filesize($realPath) > 102400) { // Esperar a >100KB
+            chmod($realPath, 0777); 
             sleep(1); 
             $jobData['status'] = 'finished';
             $jobData['download_url'] = '?action=download&file=' . $jobData['filename'];
             file_put_contents($jobFile, json_encode($jobData));
-            // Borrar el archivo crudo de entrada para ahorrar espacio
             $iF = glob($uploadDir . $jobId . '_i.*'); if(!empty($iF)) @unlink($iF[0]);
         }
     }
@@ -167,251 +161,142 @@ if ($action === 'status' && isset($_GET['jobId'])) {
 ?>
 
 <!DOCTYPE html>
-<html lang="es" data-bs-theme="dark">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Hooks Maker v7</title>
+    <title>Viral Video Factory</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Oswald:wght@700&display=swap" rel="stylesheet">
     <style>
-        /* ESTÉTICA "HIGH RETENTION" */
-        :root {
-            --viral-yellow: #FFFF00; /* Amarillo puro 100% */
-            --bg-dark: #050505;
-            --card-surface: #111;
-        }
-        body { 
-            background-color: var(--bg-dark); 
-            color: #fff; 
-            font-family: 'Inter', sans-serif;
-            min-height: 100vh;
-            display: flex; align-items: center; justify-content: center;
-        }
-        .app-card {
-            width: 100%; max-width: 480px;
-            background: var(--card-surface);
-            border: 2px solid #333;
-            border-radius: 24px;
-            overflow: hidden;
-            box-shadow: 0 0 50px rgba(0,0,0,0.8);
-        }
-        .header-bar {
-            background: var(--viral-yellow);
-            padding: 20px; text-align: center;
-        }
-        .header-title {
-            font-family: 'Anton', sans-serif;
-            font-size: 2rem;
-            color: #000;
-            text-transform: uppercase;
-            margin: 0; letter-spacing: 1px;
-            line-height: 1;
-        }
-        .form-section { padding: 30px; }
+        :root { --accent: #FFD700; --bg: #090909; }
+        body { background: var(--bg); color: white; font-family: 'Oswald', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+        .main-container { width: 100%; max-width: 450px; padding: 20px; }
         
-        /* INPUT GIGANTE */
-        .viral-input-label {
-            color: var(--viral-yellow);
-            font-weight: 800;
-            font-size: 0.9rem;
-            letter-spacing: 1px;
-            margin-bottom: 10px;
-            display: block;
-            text-transform: uppercase;
+        .hook-input {
+            background: #1a1a1a; border: 2px solid #333; color: var(--accent);
+            font-size: 1.4rem; font-family: 'Anton', sans-serif; text-transform: uppercase;
+            padding: 15px; width: 100%; border-radius: 12px; margin-bottom: 5px;
         }
-        .viral-input {
-            background: #000;
-            border: 2px solid #444;
-            color: #fff;
-            font-family: 'Anton', sans-serif; /* Ves la fuente viral mientras escribes */
-            font-size: 1.5rem;
-            padding: 15px;
-            text-transform: uppercase; /* FORZAR MAYÚSCULAS VISUALMENTE */
-            border-radius: 12px;
-            width: 100%;
-            transition: 0.3s;
-        }
-        .viral-input:focus {
-            outline: none;
-            border-color: var(--viral-yellow);
-            box-shadow: 0 0 20px rgba(255, 255, 0, 0.2);
-        }
-        .char-count { text-align: right; font-size: 0.8rem; color: #666; margin-top: 5px; }
-        
-        .file-input-wrapper {
-            margin-top: 25px;
-            border: 2px dashed #444;
-            padding: 20px;
-            border-radius: 12px;
-            text-align: center;
-            cursor: pointer;
-            transition: 0.3s;
-        }
-        .file-input-wrapper:hover { border-color: #fff; background: #1a1a1a; }
-        
-        .cta-btn {
-            background: var(--viral-yellow);
-            color: #000;
-            font-family: 'Anton', sans-serif;
-            font-size: 1.5rem;
-            width: 100%;
-            padding: 18px;
-            border: none;
-            border-radius: 12px;
-            margin-top: 25px;
-            text-transform: uppercase;
-            cursor: pointer;
-            transition: transform 0.2s;
-        }
-        .cta-btn:active { transform: scale(0.98); }
+        .hook-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 15px rgba(255, 215, 0, 0.3); }
+        .label-viral { color: #888; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; display: block; }
 
-        /* RESULTADOS */
-        .preview-container {
-            width: 100%; aspect-ratio: 9/16;
-            background: #000;
-            border-radius: 12px;
-            overflow: hidden;
-            margin-bottom: 20px;
-            position: relative;
+        .btn-upload-wrapper {
+            background: #1a1a1a; border: 2px dashed #444; border-radius: 12px;
+            padding: 25px; text-align: center; cursor: pointer; transition: 0.2s; margin-top: 20px;
         }
-        video { width: 100%; height: 100%; object-fit: cover; }
+        .btn-upload-wrapper:hover { background: #252525; border-color: var(--accent); }
         
+        .btn-action {
+            background: var(--accent); color: black; font-size: 1.5rem; font-family: 'Anton', sans-serif;
+            width: 100%; border: none; padding: 18px; border-radius: 12px; margin-top: 25px;
+            text-transform: uppercase; cursor: pointer; box-shadow: 0 5px 20px rgba(255, 215, 0, 0.2);
+        }
+        .btn-action:active { transform: scale(0.98); }
+
+        .preview-area {
+            background: black; border-radius: 12px; overflow: hidden;
+            aspect-ratio: 9/16; border: 1px solid #333; margin-bottom: 20px;
+        }
         .hidden { display: none; }
     </style>
 </head>
 <body>
 
-<div class="app-card">
-    <div class="header-bar">
-        <h1 class="header-title">VIRAL HOOK MAKER</h1>
-    </div>
+<div class="main-container">
     
-    <div class="form-section">
-        
-        <?php if (!$hasFont || !$hasLogo): ?>
-            <div class="alert alert-warning p-2 small text-center mb-3 text-black fw-bold bg-warning border-0">
-                ⚠️ FALTAN RECURSOS: Sube <code>font.ttf</code> y <code>logo.png</code>
-            </div>
-        <?php endif; ?>
-
-        <div id="stepInput">
-            <form id="uploadForm">
-                <div>
-                    <label class="viral-input-label">1. Escribe tu Gancho (Hook)</label>
-                    <input type="text" name="videoTitle" id="titleInput" class="viral-input" placeholder="¡ESTO ES INCREÍBLE!" maxlength="35" required autocomplete="off">
-                    <div class="char-count"><span id="charNum">0</span>/35 (Corto = Viral)</div>
-                </div>
-
-                <div class="file-input-wrapper" onclick="document.getElementById('fileInput').click()">
-                    <div class="fw-bold text-white">2. Toca para subir Video</div>
-                    <div class="small text-muted mt-1">MP4, MOV (Vertical recomendado)</div>
-                    <input type="file" name="videoFile" id="fileInput" accept="video/*" hidden required onchange="document.querySelector('.file-input-wrapper div').innerText = '✅ ' + this.files[0].name">
-                </div>
-
-                <button type="submit" class="cta-btn">🚀 CREAR VIRAL</button>
-            </form>
-        </div>
-
-        <div id="stepProcess" class="hidden text-center py-5">
-            <div class="spinner-border text-warning mb-4" style="width: 3rem; height: 3rem;"></div>
-            <h3 class="fw-bold text-white">COCINANDO EL VIRAL...</h3>
-            <p class="text-secondary small mt-2">Maximizando retención • Renderizando header • Limpiando metadatos</p>
-        </div>
-
-        <div id="stepResult" class="hidden text-center">
-            <h3 class="fw-bold text-success mb-3">✅ ¡LISTO PARA SUBIR!</h3>
-            
-            <div class="preview-container">
-                <div id="videoWrapper" style="width:100%; height:100%;"></div>
-            </div>
-
-            <a id="downloadLink" href="#" class="cta-btn d-block text-decoration-none pt-3">
-                ⬇️ DESCARGAR Y BORRAR
-            </a>
-            <button onclick="location.reload()" class="btn btn-link text-secondary mt-3 text-decoration-none">🔄 Crear otro hook</button>
-        </div>
-
+    <div class="text-center mb-4">
+        <h1 style="font-family: 'Anton'; color: var(--accent); font-size: 2.5rem; margin:0;">VIRAL FACTORY</h1>
+        <p style="color: #666; font-size: 0.9rem;">TECNOLOGÍA DE RETENCIÓN DE AUDIENCIA</p>
     </div>
+
+    <?php if (!$hasFont): ?>
+        <div class="alert alert-danger text-center p-2 small">⚠️ SUBE "font.ttf" PARA ACTIVAR TÍTULOS</div>
+    <?php endif; ?>
+
+    <div id="step1">
+        <form id="uploadForm">
+            <label class="label-viral">1. Escribe el Gancho (Hook)</label>
+            <input type="text" name="videoTitle" id="titleIn" class="hook-input" placeholder="¡ESTO ES IMPOSIBLE!" maxlength="40" required autocomplete="off">
+            <div class="text-end text-muted small"><span id="charCount">0</span>/40</div>
+
+            <div class="btn-upload-wrapper" onclick="document.getElementById('vFile').click()">
+                <div style="font-size: 2rem;">📂</div>
+                <div class="fw-bold mt-2">2. Toca para subir Video</div>
+                <div class="small text-muted">Formato Vertical Recomendado</div>
+                <input type="file" name="videoFile" id="vFile" accept="video/*" hidden required onchange="this.parentElement.style.borderColor='#FFD700'; this.parentElement.querySelector('.fw-bold').innerText='✅ VIDEO SELECCIONADO'">
+            </div>
+
+            <button type="submit" class="btn-action">🚀 GENERAR AHORA</button>
+        </form>
+    </div>
+
+    <div id="step2" class="hidden text-center py-5">
+        <div class="spinner-border text-warning mb-4" style="width: 3rem; height: 3rem;"></div>
+        <h3 class="fw-bold">RENDERIZANDO...</h3>
+        <p class="text-muted small">Aplicando corrección de color y formato viral.</p>
+    </div>
+
+    <div id="step3" class="hidden text-center">
+        <h3 class="text-success fw-bold mb-3">✅ ¡VIDEO LISTO!</h3>
+        <div class="preview-area">
+            <div id="vidContainer" style="width:100%; height:100%;"></div>
+        </div>
+        <a id="dlBtn" href="#" class="btn-action text-decoration-none d-block">⬇️ DESCARGAR</a>
+        <button onclick="location.reload()" class="btn btn-link text-muted mt-3 text-decoration-none">CREAR OTRO</button>
+    </div>
+
 </div>
 
 <script>
-// Contador de caracteres para psicología de "Hook Corto"
-const input = document.getElementById('titleInput');
-const counter = document.getElementById('charNum');
-input.addEventListener('input', function() {
-    this.value = this.value.toUpperCase(); // Forzar mayúsculas en input
-    counter.innerText = this.value.length;
-    if(this.value.length >= 35) counter.style.color = 'red';
-    else counter.style.color = '#666';
+// Contador caracteres
+document.getElementById('titleIn').addEventListener('input', function(){
+    this.value = this.value.toUpperCase();
+    document.getElementById('charCount').innerText = this.value.length;
 });
 
-// Manejo del proceso
+// Lógica de App
 const form = document.getElementById('uploadForm');
-const steps = {
-    input: document.getElementById('stepInput'),
-    process: document.getElementById('stepProcess'),
-    result: document.getElementById('stepResult')
-};
-
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if(!document.getElementById('fileInput').files.length) { alert("Selecciona un video"); return; }
+    if(!document.getElementById('vFile').files.length) return alert("Falta el video");
     
-    steps.input.classList.add('hidden');
-    steps.process.classList.remove('hidden');
+    document.getElementById('step1').classList.add('hidden');
+    document.getElementById('step2').classList.remove('hidden');
 
     const formData = new FormData(form);
-    
     try {
         const res = await fetch('?action=upload', { method: 'POST', body: formData });
         const data = await res.json();
-        
-        if (data.status === 'success') {
-            trackJob(data.jobId);
-        } else {
-            alert(data.message); location.reload();
-        }
-    } catch (err) {
-        alert("Error de conexión"); location.reload();
-    }
+        if(data.status === 'success') track(data.jobId);
+        else { alert(data.message); location.reload(); }
+    } catch { alert("Error de red"); location.reload(); }
 });
 
-function trackJob(jobId) {
-    let attempts = 0;
-    const interval = setInterval(async () => {
-        attempts++;
-        if (attempts > 120) { clearInterval(interval); alert("Tiempo agotado"); location.reload(); }
-        
+function track(id) {
+    let t = 0;
+    const i = setInterval(async () => {
+        t++; if(t>120) { clearInterval(i); alert("Tiempo agotado"); location.reload(); }
         try {
-            const res = await fetch(`?action=status&jobId=${jobId}`);
+            const res = await fetch(`?action=status&jobId=${id}`);
             const data = await res.json();
-            
-            if (data.status === 'finished') {
-                clearInterval(interval);
-                showResult(data);
+            if(data.status === 'finished') {
+                clearInterval(i);
+                show(data);
             }
-        } catch (e) { console.log("Waiting..."); }
-    }, 3000); // Revisar cada 3 seg
+        } catch {}
+    }, 3000);
 }
 
-function showResult(data) {
-    steps.process.classList.add('hidden');
-    steps.result.classList.remove('hidden');
+function show(data) {
+    document.getElementById('step2').classList.add('hidden');
+    document.getElementById('step3').classList.remove('hidden');
+    document.getElementById('dlBtn').href = data.download_url;
     
-    document.getElementById('downloadLink').href = data.download_url;
-    
-    // Timestamp para evitar caché y que salga en blanco
-    const ts = new Date().getTime();
-    const realPath = 'processed/' + data.filename + '?t=' + ts;
-    
-    document.getElementById('videoWrapper').innerHTML = `
-        <video width="100%" height="100%" controls autoplay muted playsinline loop>
-            <source src="${realPath}" type="video/mp4">
-        </video>
-    `;
+    // Truco anti-caché y permisos
+    const url = 'processed/' + data.filename + '?t=' + Date.now();
+    document.getElementById('vidContainer').innerHTML = `<video width="100%" height="100%" controls autoplay muted loop playsinline><source src="${url}" type="video/mp4"></video>`;
 }
 </script>
-
 </body>
 </html>
