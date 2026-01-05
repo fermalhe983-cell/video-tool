@@ -1,212 +1,278 @@
 <?php
 // ==========================================
-// LAVADORA DE VIDEO PRO v2.0 (Asíncrono)
+// GENERADOR DE REELS PRO v4.0 (Auto-Limpieza + Diseño News)
 // ==========================================
-// Configuración robusta para VPS
-ini_set('display_errors', 0); // Ocultar errores en producción
-ini_set('max_execution_time', 0); // Sin límite de tiempo para el script
-ini_set('memory_limit', '1024M'); // 1GB de RAM permitida
+ini_set('display_errors', 0);
+ini_set('max_execution_time', 0);
+ini_set('memory_limit', '1024M');
 
-// Directorios
+// CONFIGURACIÓN
 $baseDir = __DIR__ . '/';
 $uploadDir = $baseDir . 'uploads/';
 $processedDir = $baseDir . 'processed/';
-$jobsDir = $baseDir . 'jobs/'; // Carpeta para estado de trabajos
-$logoPath = $baseDir . 'logo.png'; // Tu archivo de marca de agua
+$jobsDir = $baseDir . 'jobs/'; 
+$logoPath = $baseDir . 'logo.png'; 
+$fontPath = $baseDir . 'font.ttf'; 
 
-// Asegurar que directorios existen con permisos
+// Crear carpetas
 if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
 if (!file_exists($processedDir)) mkdir($processedDir, 0777, true);
 if (!file_exists($jobsDir)) mkdir($jobsDir, 0777, true);
 
-// Verificar si existe el logo
 $hasLogo = file_exists($logoPath);
+$hasFont = file_exists($fontPath);
 
 // ==========================================
-// BACKEND: API PARA MANEJAR PETICIONES
+// FUNCIÓN DE LIMPIEZA AUTOMÁTICA (GARBAGE COLLECTOR)
 // ==========================================
-header('Content-Type: text/html; charset=utf-8');
+// Borra archivos creados hace más de 30 minutos para que el servidor no explote
+function limpiarBasura($dir) {
+    if (!is_dir($dir)) return;
+    $files = glob($dir . '*');
+    $now = time();
+    foreach ($files as $file) {
+        if (is_file($file)) {
+            // Si el archivo tiene más de 30 minutos (1800 segundos), chao
+            if ($now - filemtime($file) >= 1800) { 
+                @unlink($file);
+            }
+        }
+    }
+}
+// Ejecutar limpieza en cada carga
+limpiarBasura($uploadDir);
+limpiarBasura($processedDir);
+limpiarBasura($jobsDir);
 
+
+// ==========================================
+// BACKEND
+// ==========================================
 $action = $_GET['action'] ?? '';
 
-// ---> ACCIÓN 1: Recibir archivo e iniciar proceso en segundo plano
+// ---> ACCIÓN: DESCARGAR Y BORRAR (Auto-Destrucción)
+if ($action === 'download' && isset($_GET['file'])) {
+    $file = basename($_GET['file']);
+    $filePath = $processedDir . $file;
+
+    if (file_exists($filePath)) {
+        // Forzar descarga
+        header('Content-Description: File Transfer');
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="REEL_LIMPIO_'.rand(1000,9999).'.mp4"');
+        header('Expires: 0');
+        header('Cache-Control: must-revalidate');
+        header('Pragma: public');
+        header('Content-Length: ' . filesize($filePath));
+        
+        // Enviar archivo
+        readfile($filePath);
+
+        // BORRAR EL ARCHIVO INMEDIATAMENTE DESPUÉS DE ENVIARLO
+        @unlink($filePath);
+        
+        // También intentar borrar el json del trabajo si existe
+        $jobId = str_replace('_reel.mp4', '', $file);
+        @unlink($jobsDir . $jobId . '.json');
+        exit;
+    } else {
+        die("El archivo ya fue borrado o no existe.");
+    }
+}
+
+// ---> ACCIÓN: SUBIR Y PROCESAR
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
-        echo json_encode(['status' => 'error', 'message' => 'Error en la subida del archivo.']);
-        exit;
+        echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
     }
+
+    $rawTitle = $_POST['videoTitle'] ?? '';
+    // Filtro para permitir tildes y signos, pero quitar comillas que rompen FFmpeg
+    $cleanTitle = str_replace(["'", "\"", "\\"], "", $rawTitle);
+    $cleanTitle = substr($cleanTitle, 0, 60); 
 
     $file = $_FILES['videoFile'];
     $jobId = uniqid('job_');
     $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
     $inputFilename = $jobId . '_in.' . $ext;
-    $outputFilename = $jobId . '_clean.mp4';
+    $outputFilename = $jobId . '_reel.mp4';
     
     $targetPath = $uploadDir . $inputFilename;
     $outputPath = $processedDir . $outputFilename;
     $jobFile = $jobsDir . $jobId . '.json';
 
     if (move_uploaded_file($file['tmp_name'], $targetPath)) {
-        // Calcular hash original
-        $originalHash = md5_file($targetPath);
-
-        // ---------------------------------------------------------
-        // EL COMANDO PROFESIONAL (Blur + Speed + Pitch + Watermark)
-        // ---------------------------------------------------------
-        // Definimos la entrada del logo si existe
-        $logoInput = $hasLogo ? "-i " . escapeshellarg($logoPath) : "";
         
-        // Filtro de marca de agua (si hay logo, lo pone arriba derecha. Si no, no hace nada)
-        // overlay=main_w-overlay_w-30:30 -> Posición: Arriba a la derecha con margen de 30px
-        $watermarkFilter = $hasLogo ? "[mixed][1:v]overlay=main_w-overlay_w-30:30[watermarked];[watermarked]" : "[mixed]";
+        // 1. Entradas
+        $inputs = "-i " . escapeshellarg($targetPath);
+        if ($hasLogo) $inputs .= " -i " . escapeshellarg($logoPath);
 
-        $ffmpegCmd = "nice -n 19 ffmpeg -i " . escapeshellarg($targetPath) . " $logoInput -threads 2 -filter_complex \"[0:v]split=2[bg][fg];[bg]scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,boxblur=20:10[bg_blurred];[fg]scale=1080:1080:force_original_aspect_ratio=decrease[fg_scaled];[bg_blurred][fg_scaled]overlay=(W-w)/2:(H-h)/2[mixed];{$watermarkFilter}setpts=0.94*PTS[v_final];[0:a]atempo=1.0638[a_final]\" -map \"[v_final]\" -map \"[a_final]\" -map_metadata -1 -c:v libx264 -preset veryfast -crf 26 -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputPath) . " > /dev/null 2>&1 &";
+        // 2. Filtros
+        $filter = "";
+        
+        // Fondo Blur 9:16
+        $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg];";
+        // Video Principal
+        $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];";
+        // Overlay
+        $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
+        $lastStream = "[base]";
 
-        // Ejecutar en segundo plano (nohup ... &)
+        // Logo (Arriba Derecha)
+        if ($hasLogo) {
+            $filter .= "{$lastStream}[1:v]overlay=main_w-overlay_w-40:60[watermarked];";
+            $lastStream = "[watermarked]";
+        }
+
+        // TÍTULO ESTILO "BREAKING NEWS" (Fondo Rojo, Letra Blanca)
+        if ($hasFont && !empty($cleanTitle)) {
+            $fontFileSafe = str_replace('\\', '/', $fontPath);
+            
+            // box=1: Activa la caja de fondo
+            // boxcolor=#D00000@1: Color Rojo Intenso (Opacidad 100%)
+            // boxborderw=20: Margen (padding) alrededor del texto
+            // y=180: Posición vertical (un poco más abajo del borde superior)
+            
+            $drawText = "drawtext=fontfile='$fontFileSafe':text='$cleanTitle':fontcolor=white:fontsize=75:x=(w-text_w)/2:y=180:box=1:boxcolor=#CC0000@1:boxborderw=15";
+            
+            $filter .= "{$lastStream}{$drawText}[titled];";
+            $lastStream = "[titled]";
+        }
+
+        // Acelerar y Audio Fix
+        $filter .= "{$lastStream}setpts=0.94*PTS[v_final];[0:a]atempo=1.0638[a_final]";
+
+        // Ejecutar
+        $ffmpegCmd = "nice -n 19 ffmpeg $inputs -threads 2 -filter_complex \"$filter\" -map \"[v_final]\" -map \"[a_final]\" -map_metadata -1 -c:v libx264 -preset veryfast -crf 26 -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputPath) . " > /dev/null 2>&1 &";
+
         exec("nohup $ffmpegCmd");
 
-        // Guardar estado inicial del trabajo
+        // NOTA: Borraremos el archivo ORIGINAL (el subido) inmediatamente para ahorrar espacio.
+        // Solo guardamos la referencia para el proceso, pero podemos borrar el input en unos segundos.
+        // Por seguridad, dejemos que el Garbage Collector lo borre en 30 mins, es más seguro.
+
         file_put_contents($jobFile, json_encode([
             'status' => 'processing',
-            'original_name' => $file['name'],
-            'original_hash' => $originalHash,
             'output_path' => $outputPath,
+            'filename' => $outputFilename, // Guardamos nombre para link de descarga
             'start_time' => time()
         ]));
 
         echo json_encode(['status' => 'success', 'jobId' => $jobId]);
     } else {
-        echo json_encode(['status' => 'error', 'message' => 'No se pudo mover el archivo subido.']);
+        echo json_encode(['status' => 'error', 'message' => 'Error mover archivo.']);
     }
     exit;
 }
 
-// ---> ACCIÓN 2: Consultar estado del proceso (Polling)
+// ---> ESTADO DEL TRABAJO
 if ($action === 'status' && isset($_GET['jobId'])) {
     header('Content-Type: application/json');
-    $jobId = preg_replace('/[^a-z0-9_]/i', '', $_GET['jobId']); // Sanitize
+    $jobId = preg_replace('/[^a-z0-9_]/i', '', $_GET['jobId']);
     $jobFile = $jobsDir . $jobId . '.json';
 
-    if (!file_exists($jobFile)) {
-        echo json_encode(['status' => 'not_found']);
-        exit;
-    }
-
+    if (!file_exists($jobFile)) { echo json_encode(['status' => 'not_found']); exit; }
     $jobData = json_decode(file_get_contents($jobFile), true);
 
     if ($jobData['status'] === 'processing') {
-        // Verificar si el archivo de salida ya existe y FFmpeg terminó (el archivo JSON sigue diciendo processing)
-        // Una forma simple en VPS es verificar si el archivo de salida existe y no ha cambiado de tamaño en 5 segundos, 
-        // pero para este ejemplo simple, asumiremos que si el archivo existe y es jugable, terminó.
-        // Método más robusto: checkear si el proceso PID sigue corriendo. 
-        // Método simple para EasyPanel: Verificar si el archivo destino existe y tiene tamaño > 0.
-
-        if (file_exists($jobData['output_path']) && filesize($jobData['output_path']) > 102400) { // Mayor a 100KB
-            // Pequeña espera de seguridad para asegurar que FFmpeg cerró el archivo
-            sleep(2);
-            $newHash = md5_file($jobData['output_path']);
+        if (file_exists($jobData['output_path']) && filesize($jobData['output_path']) > 102400) {
+            sleep(1); 
             $jobData['status'] = 'finished';
-            $jobData['new_hash'] = $newHash;
-            $jobData['download_url'] = 'processed/' . basename($jobData['output_path']);
-            file_put_contents($jobFile, json_encode($jobData)); // Actualizar estado
+            // El link de descarga apunta a la ACCIÓN DE DESCARGAR (que borra el archivo)
+            $jobData['download_url'] = '?action=download&file=' . $jobData['filename'];
+            file_put_contents($jobFile, json_encode($jobData));
+            
+            // TRUCO: Ya podemos borrar el archivo ORIGINAL subido (el input) para ahorrar espacio
+            $inputFileGlob = glob($uploadDir . $jobId . '_in.*');
+            if(!empty($inputFileGlob)) @unlink($inputFileGlob[0]);
         }
     }
-    
-    // Calcular tiempo transcurrido
-    $jobData['elapsed'] = time() - $jobData['start_time'];
     echo json_encode($jobData);
     exit;
 }
-
-// ==========================================
-// FRONTEND: HTML + JAVASCRIPT
-// ==========================================
 ?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lavadora de Video PRO v2</title>
+    <title>Generador Reels Viral</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
     <style>
-        body { background: #f8f9fa; }
-        .main-card { max-width: 800px; margin: 40px auto; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
-        .card-header { background: linear-gradient(135deg, #0d6efd, #0a58ca); color: white; border-radius: 15px 15px 0 0 !important; padding: 20px; }
-        .hash-box { background: #e9ecef; padding: 8px; border-radius: 6px; font-family: monospace; font-size: 0.9em; word-break: break-all; }
-        .video-container video { width: 100%; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        .progress-bar-animated { transition: width 0.5s ease; }
+        body { background-color: #121212; color: #fff; font-family: 'Segoe UI', sans-serif; }
+        .card { background-color: #1e1e1e; border: 1px solid #333; border-radius: 15px; }
+        .header-viral { background: linear-gradient(90deg, #D00000, #FF0000); padding: 20px; text-align: center; font-family: 'Anton', sans-serif; letter-spacing: 1px; }
+        .form-control { background-color: #2d2d2d; border: 1px solid #444; color: white; }
+        .form-control:focus { background-color: #333; color: white; border-color: #D00000; box-shadow: 0 0 0 0.25rem rgba(208, 0, 0, 0.25); }
+        .btn-viral { background-color: #fff; color: #D00000; font-weight: bold; font-family: 'Anton', sans-serif; text-transform: uppercase; border: none; }
+        .btn-viral:hover { background-color: #e0e0e0; color: #900000; }
+        .preview-box { background: black; border-radius: 10px; overflow: hidden; max-width: 300px; margin: 0 auto; border: 2px solid #333; }
+        .alert-warning { background-color: #332b00; border-color: #665500; color: #ffdd00; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <div class="card main-card">
-        <div class="card-header text-center">
-            <h3>🚀 Lavadora de Video Profesional v2.0</h3>
-            <p class="mb-0 opacity-75">Anti-Copyright + Marca de Agua + Procesamiento en Segundo Plano</p>
+<div class="container mt-5" style="max-width: 600px;">
+    <div class="card shadow-lg overflow-hidden">
+        <div class="header-viral">
+            <h1 class="mb-0">🔥 REELS MAKER VIRAL</h1>
+            <p class="mb-0 small text-white-50">Edición Automática + Anti-Copyright</p>
         </div>
         <div class="card-body p-4">
-            
+
             <div id="alertBox" class="alert d-none"></div>
-            <?php if (!$hasLogo): ?>
-                <div class="alert alert-warning small">⚠️ Aviso: No se encontró el archivo <code>logo.png</code>. El video se procesará sin marca de agua. Sube tu logo al repositorio para activarla.</div>
+            <?php if (!$hasFont): ?>
+                <div class="alert alert-warning small">⚠️ <strong>FALTA FUENTE:</strong> Sube el archivo <code>font.ttf</code> (Recomiendo "Anton") para activar los títulos rojos.</div>
             <?php endif; ?>
 
-            <div id="uploadSection">
+            <div id="inputSection">
                 <form id="uploadForm">
-                    <div class="mb-4">
-                        <label for="videoFile" class="form-label h5">1. Selecciona tu video (MP4/MOV)</label>
-                        <input class="form-control form-control-lg" type="file" id="videoFile" name="videoFile" accept="video/mp4,video/quicktime,video/x-m4v" required>
+                    <div class="mb-3">
+                        <label class="form-label text-uppercase fw-bold text-danger">1. Título Gancho (Breaking News)</label>
+                        <input type="text" name="videoTitle" class="form-control form-control-lg" placeholder="Ej: ¡IMÁGENES IMPACTANTES!" maxlength="40" required>
                     </div>
+
+                    <div class="mb-4">
+                        <label class="form-label text-uppercase fw-bold text-danger">2. Video Original</label>
+                        <input class="form-control" type="file" name="videoFile" accept="video/*" required>
+                    </div>
+
                     <div class="d-grid">
-                        <button type="submit" class="btn btn-primary btn-lg fw-bold">
-                            ▶️ INICIAR PROCESAMIENTO PROFESIONAL
+                        <button type="submit" class="btn btn-viral btn-lg py-3">
+                            🚀 PROCESAR VIDEO AHORA
                         </button>
                     </div>
+                    <p class="text-center mt-3 small text-muted">
+                        * El video se borrará automáticamente del servidor al descargarlo.
+                    </p>
                 </form>
             </div>
 
-            <div id="progressSection" class="d-none text-center py-4">
-                <h5 class="mb-3">⏳ Procesando Video en el Servidor...</h5>
-                <p class="text-muted mb-2">Esto puede tardar unos minutos dependiendo del tamaño.</p>
-                <p class="small">Tiempo transcurrido: <span id="timer">0</span> segundos</p>
-                <div class="progress" style="height: 25px;">
-                    <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated bg-info" role="progressbar" style="width: 100%">PROCESANDO... NO CIERRES ESTA PESTAÑA</div>
-                </div>
+            <div id="progressSection" class="d-none text-center py-5">
+                <div class="spinner-border text-danger mb-3" style="width: 3rem; height: 3rem;" role="status"></div>
+                <h4 class="fw-bold">PROCESANDO...</h4>
+                <p class="text-white-50">Creando fondo, quemando título y limpiando hash.</p>
             </div>
 
-            <div id="resultSection" class="d-none">
-                <div class="alert alert-success fw-bold text-center">✅ ¡Video Procesado Exitosamente!</div>
-
-                <div class="row mb-4">
-                    <div class="col-md-6">
-                        <h6>🔴 Hash Original (Detectado por FB):</h6>
-                        <div id="oldHash" class="hash-box text-danger">...</div>
-                    </div>
-                    <div class="col-md-6">
-                        <h6>🟢 Nuevo Hash Único (Limpio):</h6>
-                        <div id="newHash" class="hash-box text-success fw-bold">...</div>
-                    </div>
-                </div>
-
-                <div class="video-container mb-4">
-                    <h6>Vista Previa del Resultado:</h6>
-                    <div id="videoPlayerContainer"></div>
+            <div id="resultSection" class="d-none text-center">
+                <div class="alert alert-success fw-bold">✅ ¡VIDEO LISTO!</div>
+                
+                <p class="small text-muted">Vista previa (Baja Calidad):</p>
+                <div class="preview-box mb-4">
+                    <div id="videoContainer"></div>
                 </div>
 
                 <div class="d-grid gap-2">
-                    <a id="downloadBtn" href="#" class="btn btn-success btn-lg fw-bold" download>
-                        ⬇️ DESCARGAR VIDEO LIMPIO
+                    <a id="downloadBtn" href="#" class="btn btn-viral btn-lg py-3">
+                        ⬇️ DESCARGAR Y BORRAR DEL SERVIDOR
                     </a>
-                    <button onclick="location.reload()" class="btn btn-outline-secondary">🔄 Procesar Otro Video</button>
+                    <button onclick="location.reload()" class="btn btn-outline-light btn-sm">🔄 Crear Otro</button>
                 </div>
-                
-                <div class="mt-3 small text-muted">
-                    <strong>Cambios aplicados:</strong> Formato cuadrado con fondo blur, aceleración imperceptible (audio/video), corrección de tono y marca de agua (si estaba disponible). Metadata eliminada.
-                </div>
+                <p class="mt-2 small text-white-50">⚠️ Al hacer clic en descargar, el video se elimina del servidor.</p>
             </div>
 
         </div>
@@ -214,111 +280,69 @@ if ($action === 'status' && isset($_GET['jobId'])) {
 </div>
 
 <script>
-let jobId = null;
-let pollingInterval = null;
-let startTime = null;
-let timerInterval = null;
-
 const form = document.getElementById('uploadForm');
-const uploadSection = document.getElementById('uploadSection');
-const progressSection = document.getElementById('progressSection');
-const resultSection = document.getElementById('resultSection');
-const alertBox = document.getElementById('alertBox');
-const timerSpan = document.getElementById('timer');
+const sections = {
+    input: document.getElementById('inputSection'),
+    progress: document.getElementById('progressSection'),
+    result: document.getElementById('resultSection')
+};
 
-// 1. Manejar el envío del formulario
 form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    sections.input.classList.add('d-none');
+    sections.progress.classList.remove('d-none');
+
     const formData = new FormData(form);
     
-    // Mostrar UI de progreso
-    uploadSection.classList.add('d-none');
-    progressSection.classList.remove('d-none');
-    alertBox.classList.add('d-none');
-    startTimer();
-
     try {
-        // Subir el archivo
-        const response = await fetch('?action=upload', { method: 'POST', body: formData });
-        const data = await response.json();
-
+        const res = await fetch('?action=upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        
         if (data.status === 'success') {
-            jobId = data.jobId;
-            // Empezar a preguntar por el estado cada 3 segundos
-            pollingInterval = setInterval(checkStatus, 3000);
+            trackJob(data.jobId);
         } else {
-            throw new Error(data.message || 'Error al subir');
+            alert('Error: ' + data.message);
+            location.reload();
         }
-    } catch (error) {
-        showError(error.message);
-        resetUI();
+    } catch (err) {
+        alert('Error de conexión');
+        location.reload();
     }
 });
 
-// 2. Función para preguntar el estado al servidor
-async function checkStatus() {
-    try {
-        const response = await fetch(`?action=status&jobId=${jobId}`);
-        const data = await response.json();
+function trackJob(jobId) {
+    const interval = setInterval(async () => {
+        try {
+            const res = await fetch(`?action=status&jobId=${jobId}`);
+            const data = await res.json();
 
-        if (data.status === 'finished') {
-            // ¡Terminó!
-            clearInterval(pollingInterval);
-            stopTimer();
-            showResults(data);
-        } else if (data.status === 'not_found') {
-             clearInterval(pollingInterval);
-             showError("Error: El trabajo no se encontró en el servidor.");
-             resetUI();
+            if (data.status === 'finished') {
+                clearInterval(interval);
+                showResult(data);
+            }
+        } catch (e) {
+            console.log("Esperando servidor...");
         }
-        // Si sigue 'processing', no hacemos nada, esperamos la siguiente consulta.
-
-    } catch (error) {
-        console.error("Error de conexión al verificar estado:", error);
-        // No detenemos el polling por un error de red momentáneo, el servidor sigue trabajando.
-    }
+    }, 3000);
 }
 
-// 3. Mostrar los resultados finales
-function showResults(data) {
-    progressSection.classList.add('d-none');
-    resultSection.classList.remove('d-none');
+function showResult(data) {
+    sections.progress.classList.add('d-none');
+    sections.result.classList.remove('d-none');
+    
+    const btn = document.getElementById('downloadBtn');
+    btn.href = data.download_url; // Este link activa el borrado automático
 
-    document.getElementById('oldHash').textContent = data.original_hash;
-    document.getElementById('newHash').textContent = data.new_hash;
-    document.getElementById('downloadBtn').href = data.download_url;
-    document.getElementById('downloadBtn').download = 'video_limpio_' + data.new_hash.substring(0, 8) + '.mp4';
-
-    // Insertar reproductor de video
-    const videoHTML = `
-        <video controls autoplay muted loop playsinline>
-            <source src="${data.download_url}" type="video/mp4">
-            Tu navegador no soporta video HTML5.
+    // El reproductor usa el archivo temporalmente antes de que lo borres
+    // Nota: El preview NO borra el archivo, solo el botón de descargar.
+    // Necesitamos reconstruir la ruta real para el preview, ya que data.download_url es un script PHP.
+    const realPath = 'processed/' + data.filename;
+    
+    document.getElementById('videoContainer').innerHTML = `
+        <video width="100%" controls autoplay muted loop>
+            <source src="${realPath}" type="video/mp4">
         </video>
     `;
-    document.getElementById('videoPlayerContainer').innerHTML = videoHTML;
-}
-
-// Funciones auxiliares de UI
-function showError(msg) {
-    alertBox.textContent = msg;
-    alertBox.classList.remove('d-none', 'alert-success');
-    alertBox.classList.add('alert-danger');
-}
-function resetUI() {
-    uploadSection.classList.remove('d-none');
-    progressSection.classList.add('d-none');
-    stopTimer();
-}
-function startTimer() {
-    startTime = Date.now();
-    timerInterval = setInterval(() => {
-        const seconds = Math.floor((Date.now() - startTime) / 1000);
-        timerSpan.textContent = seconds;
-    }, 1000);
-}
-function stopTimer() {
-    clearInterval(timerInterval);
 }
 </script>
 
