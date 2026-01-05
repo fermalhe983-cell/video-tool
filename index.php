@@ -1,280 +1,335 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v13.0 (PERSISTENCIA TEMPORAL + VIRAL PSYCHOLOGY)
+// VIRAL REELS PRO v14.0 (Motor v6 Estable + Psicología Viral Extrema)
 // ==========================================
+// Mismo motor técnico que funcionó, pero con diseño visual agresivo.
+
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 0);
 ini_set('memory_limit', '1024M');
 
-// 1. DIRECTORIOS (Rutas Absolutas)
-$baseDir = __DIR__;
-$uploadDir = $baseDir . '/uploads';
-$processedDir = $baseDir . '/processed';
-$jobsDir = $baseDir . '/jobs'; 
-$logoPath = $baseDir . '/logo.png'; 
-$fontPath = $baseDir . '/font.ttf'; 
-$logFile = $baseDir . '/debug_log.txt';
+// DIRECTORIOS
+$baseDir = __DIR__ . '/';
+$uploadDir = $baseDir . 'uploads/';
+$processedDir = $baseDir . 'processed/';
+$jobsDir = $baseDir . 'jobs/'; 
+$logoPath = $baseDir . 'logo.png'; 
+$fontPath = $baseDir . 'font.ttf'; 
 
-// Crear carpetas
-if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
-if (!file_exists($processedDir)) mkdir($processedDir, 0777, true);
-if (!file_exists($jobsDir)) mkdir($jobsDir, 0777, true);
+// Asegurar carpetas y permisos
+if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); chmod($uploadDir, 0777); }
+if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); chmod($processedDir, 0777); }
+if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777); }
 
-// ==========================================
-// RECOLECTOR DE BASURA (LIMPIEZA CADA 15 MINUTOS)
-// ==========================================
-// Esto responde a tu petición: El video vive 15 minutos y luego muere.
-foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
-    foreach (glob("$dir/*") as $file) {
-        // 900 segundos = 15 minutos
-        if (is_file($file) && (time() - filemtime($file) > 900)) {
-            @unlink($file);
+$hasLogo = file_exists($logoPath);
+$hasFont = file_exists($fontPath);
+
+// AUTO-LIMPIEZA (Cada 20 mins)
+function limpiarBasura($dir) {
+    if (!is_dir($dir)) return;
+    $files = glob($dir . '*');
+    $now = time();
+    foreach ($files as $file) {
+        if (is_file($file)) {
+            if ($now - filemtime($file) >= 1200) { 
+                @unlink($file);
+            }
         }
     }
 }
+limpiarBasura($uploadDir);
+limpiarBasura($processedDir);
+limpiarBasura($jobsDir);
 
+// ==========================================
+// BACKEND
+// ==========================================
 $action = $_GET['action'] ?? '';
 
-// ---> VER LOGS (DEBUG)
-if ($action === 'viewlog') {
-    header('Content-Type: text/plain');
-    if (file_exists($logFile)) echo file_get_contents($logFile);
-    else echo "El archivo de logs está vacío o no existe.";
-    exit;
+// ---> ACCIÓN: DESCARGAR
+if ($action === 'download' && isset($_GET['file'])) {
+    $file = basename($_GET['file']);
+    $filePath = $processedDir . $file;
+    if (file_exists($filePath)) {
+        header('Content-Description: File Transfer');
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="VIRAL_HOOK_'.date('Ymd_Hi').'.mp4"');
+        header('Content-Length: ' . filesize($filePath));
+        readfile($filePath);
+        // NOTA: Comentamos el unlink inmediato para que puedas descargarlo varias veces si falla la primera
+        // @unlink($filePath); 
+        exit;
+    } else { die("El archivo ya no existe."); }
 }
 
-// ---> SUBIR Y PROCESAR
+// ---> ACCIÓN: SUBIR
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
-    
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
-        echo json_encode(['status' => 'error', 'message' => 'Error al subir el video.']); exit;
+        echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
     }
 
-    $jobId = uniqid('v13_');
-    $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
-    $inputFile = "$uploadDir/{$jobId}_in.$ext";
-    $outputFileName = "{$jobId}_viral.mp4"; 
-    $outputFile = "$processedDir/$outputFileName";
-    $jobFile = "$jobsDir/$jobId.json";
+    $rawTitle = $_POST['videoTitle'] ?? '';
+    // PSICOLOGÍA: Forzamos MAYÚSCULAS extremas
+    $cleanTitle = mb_strtoupper(str_replace(["'", "\"", "\\", ":"], "", $rawTitle), 'UTF-8');
+    // Limitamos a 40 chars. Más de eso, la gente no lee.
+    $cleanTitle = mb_substr($cleanTitle, 0, 40); 
 
-    if (!move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile)) {
-        echo json_encode(['status' => 'error', 'message' => 'Error guardando archivo.']); exit;
-    }
-    chmod($inputFile, 0777); // Permisos totales
+    $file = $_FILES['videoFile'];
+    $jobId = uniqid('v14'); // ID v14
+    $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $inputFilename = $jobId . '_i.' . $ext;
+    $outputFilename = $jobId . '_reel.mp4';
+    $targetPath = $uploadDir . $inputFilename;
+    $outputPath = $processedDir . $outputFilename;
+    $jobFile = $jobsDir . $jobId . '.json';
 
-    // --- CONFIGURACIÓN VIRAL ---
-    $title = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
-    $title = mb_strtoupper(mb_substr($title, 0, 40)); // Mayúsculas = Grito Visual
-    $useLogo = file_exists($logoPath);
-    $useFont = file_exists($fontPath);
+    if (move_uploaded_file($file['tmp_name'], $targetPath)) {
+        chmod($targetPath, 0777);
 
-    // Inputs
-    $inputs = "-i " . escapeshellarg($inputFile);
-    if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
+        // Inputs
+        $inputs = "-i " . escapeshellarg($targetPath);
+        if ($hasLogo) $inputs .= " -i " . escapeshellarg($logoPath);
 
-    // --- FILTROS DE PSICOLOGÍA VIRAL ---
-    // 1. Fondo Blur (Evita bordes negros aburridos, retiene atención)
-    $filter = "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg];";
-    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];";
-    $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
-    $lastStream = "[base]";
+        // --- CONSTRUCCIÓN DEL FILTRO VIRAL PSICOLÓGICO ---
+        $filter = "";
+        
+        // 1. BASE: Fondo Blur + Video Centrado (Formato 9:16 OBLIGATORIO)
+        $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10,colorlevels=rimax=0.5:gimax=0.5:bimax=0.5[bg];";
+        $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];";
+        $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
+        $lastStream = "[base]";
 
-    // 2. Barra de Impacto (Negro Sólido al 90%)
-    // Posición y=60 (Zona segura superior, debajo de la hora del celular)
-    $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h=240:color=black@0.9:t=fill[bar];";
-    $lastStream = "[bar]";
+        // 2. BARRA DE NOTICIAS (Aumentada a 250px para texto GIGANTE)
+        // y=60: Zona Segura Superior.
+        // color=black@0.9: Casi sólido para máximo contraste.
+        $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h=250:color=black@0.9:t=fill[with_bar];";
+        $lastStream = "[with_bar]";
 
-    // 3. Logo (Branding)
-    if ($useLogo) {
-        $filter .= "[1:v]scale=-1:160[logo_s];";
-        $filter .= "{$lastStream}[logo_s]overlay=40:100[wlogo];";
-        $lastStream = "[wlogo]";
-    }
+        // 3. LOGO (Izquierda)
+        if ($hasLogo) {
+            $filter .= "[1:v]scale=-1:150[logo_scaled];";
+            $filter .= "{$lastStream}[logo_scaled]overlay=40:110[watermarked];";
+            $lastStream = "[watermarked]";
+        }
 
-    // 4. Título Gancho (Amarillo #FFD700)
-    // El amarillo sobre negro es el contraste más alto posible.
-    if ($useFont && !empty($title)) {
-        $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        $xPos = $useLogo ? "(w-text_w)/2+80" : "(w-text_w)/2"; // Centrado inteligente
-        $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$title':fontcolor=#FFD700:fontsize=90:borderw=4:bordercolor=black:x=$xPos:y=135[titled];";
-        $lastStream = "[titled]";
-    }
+        // 4. TÍTULO VIRAL (AMARILLO PURO + TAMAÑO MONSTRUOSO)
+        if ($hasFont && !empty($cleanTitle)) {
+            $fontFileSafe = str_replace('\\', '/', $fontPath);
+            // fontsize=95: ¡GIGANTE!
+            // fontcolor=#FFFF00: Amarillo Puro (Señal de Alerta)
+            // borderw=6: Borde negro grueso para lectura instantánea
+            // y=140: Centrado verticalmente en la barra de 250px
+            $drawText = "drawtext=fontfile='$fontFileSafe':text='$cleanTitle':fontcolor=#FFFF00:fontsize=95:borderw=6:bordercolor=black:x=(w-text_w)/2+70:y=140";
+            
+            $filter .= "{$lastStream}{$drawText}[titled];";
+            $lastStream = "[titled]";
+        }
 
-    // 5. Ajustes Técnicos (Aceleración sutil + Audio Fix)
-    $filter .= "{$lastStream}setpts=0.94*PTS[vfinal];[0:a]atempo=1.0638[afinal]";
+        // 5. Aceleración (Retención) + Fix Audio
+        $filter .= "{$lastStream}setpts=0.94*PTS[v_final];[0:a]atempo=1.0638[a_final]";
 
-    // COMANDO ROBUSTO
-    // -ar 44100: Arregla videos con audio malo.
-    // -pix_fmt yuv420p: Hace que el video se vea en iPhone y Windows.
-    // >> $logFile: Guarda errores en archivo visible.
-    $cmd = "ffmpeg -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -r 30 -pix_fmt yuv420p -c:a aac -ar 44100 -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
+        // COMANDO DE EJECUCIÓN (Usando la estructura que SÍ funcionó en v6)
+        $ffmpegCmd = "nice -n 19 ffmpeg $inputs -threads 2 -filter_complex \"$filter\" -map \"[v_final]\" -map \"[a_final]\" -map_metadata -1 -c:v libx264 -preset veryfast -crf 24 -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputPath) . " > /dev/null 2>&1 &";
 
-    exec($cmd);
+        exec("nohup $ffmpegCmd");
 
-    file_put_contents($jobFile, json_encode(['status' => 'processing', 'file' => $outputFileName]));
-    echo json_encode(['status' => 'success', 'jobId' => $jobId]);
+        file_put_contents($jobFile, json_encode(['status' => 'processing', 'filename' => $outputFilename, 'start_time' => time()]));
+        echo json_encode(['status' => 'success', 'jobId' => $jobId]);
+    } else { echo json_encode(['status' => 'error', 'message' => 'Error permisos.']); }
     exit;
 }
 
-// ---> ESTADO DEL TRABAJO
-if ($action === 'status') {
-    $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
-    $jFile = "$jobsDir/$id.json";
-    
-    if (file_exists($jFile)) {
-        $data = json_decode(file_get_contents($jFile), true);
-        $fullPath = "$processedDir/" . $data['file'];
-        
-        // Verificamos si existe y tiene tamaño real (>50KB)
-        if (file_exists($fullPath) && filesize($fullPath) > 51200) {
-            chmod($fullPath, 0777); // Permiso público
-            // URL DIRECTA (Sin scripts PHP de por medio)
-            echo json_encode(['status' => 'finished', 'url' => "processed/" . $data['file']]);
-        } else {
-            echo json_encode(['status' => 'processing']);
+// ---> ESTADO
+if ($action === 'status' && isset($_GET['jobId'])) {
+    header('Content-Type: application/json');
+    $jobId = preg_replace('/[^a-z0-9_]/i', '', $_GET['jobId']);
+    $jobFile = $jobsDir . $jobId . '.json';
+    if (!file_exists($jobFile)) { echo json_encode(['status' => 'not_found']); exit; }
+    $jobData = json_decode(file_get_contents($jobFile), true);
+
+    if ($jobData['status'] === 'processing') {
+        $realPath = $processedDir . $jobData['filename'];
+        // Esperamos a que el archivo tenga algo de peso (>50KB)
+        if (file_exists($realPath) && filesize($realPath) > 51200) {
+            chmod($realPath, 0777); 
+            sleep(1); 
+            $jobData['status'] = 'finished';
+            $jobData['download_url'] = '?action=download&file=' . $jobData['filename'];
+            file_put_contents($jobFile, json_encode($jobData));
+            // Borramos el input para ahorrar espacio, pero dejamos el output un rato
+            $iF = glob($uploadDir . $jobId . '_i.*'); if(!empty($iF)) @unlink($iF[0]);
         }
-    } else {
-        echo json_encode(['status' => 'error']);
     }
+    echo json_encode($jobData);
     exit;
 }
 ?>
 
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-bs-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Video Maker v13</title>
+    <title>Viral Reels v14 (Psychology Edition)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
-        body { background: #f3f4f6; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; color: #1f2937; }
-        .main-container { background: white; width: 100%; max-width: 500px; padding: 2rem; border-radius: 1.5rem; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); border: 1px solid #e5e7eb; }
-        h1 { font-family: 'Anton', sans-serif; text-transform: uppercase; text-align: center; color: #111; margin-bottom: 0.5rem; font-size: 2.2rem; }
-        p.subtitle { text-align: center; color: #6b7280; margin-bottom: 2rem; }
+        /* DISEÑO DE ALTO IMPACTO */
+        :root {
+            --viral-yellow: #FFFF00; /* Amarillo Puro */
+            --bg-black: #000000;
+        }
+        body { 
+            background-color: var(--bg-black); 
+            font-family: 'Inter', sans-serif; 
+            color: #fff;
+            min-height: 100vh;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .main-card { 
+            width: 100%; max-width: 500px; 
+            background: #111; 
+            border: 2px solid #333; 
+            border-radius: 20px; 
+            padding: 30px;
+            box-shadow: 0 0 40px rgba(255, 255, 0, 0.1);
+        }
+        .header-title { 
+            font-family: 'Anton', sans-serif; 
+            text-transform: uppercase; 
+            font-size: 3rem;
+            color: var(--viral-yellow);
+            text-align: center;
+            line-height: 1;
+            margin-bottom: 10px;
+        }
+        .header-sub { text-align: center; color: #666; font-size: 0.8rem; margin-bottom: 30px; letter-spacing: 2px; text-transform: uppercase; }
+
+        .input-label { color: var(--viral-yellow); font-weight: 900; font-size: 0.9rem; text-transform: uppercase; margin-bottom: 5px; display: block; }
         
-        .form-label { font-weight: 700; font-size: 0.8rem; text-transform: uppercase; color: #374151; letter-spacing: 0.05em; }
-        .viral-input { background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 0.75rem; padding: 0.75rem; width: 100%; font-weight: 600; font-size: 1.1rem; }
-        .viral-input:focus { outline: none; border-color: #000; background: white; }
+        .viral-input {
+            background: #000;
+            border: 2px solid #444;
+            color: #fff;
+            font-family: 'Anton', sans-serif;
+            font-size: 1.5rem;
+            padding: 15px;
+            text-transform: uppercase;
+            width: 100%;
+            border-radius: 10px;
+        }
+        .viral-input:focus { outline: none; border-color: var(--viral-yellow); }
+
+        .btn-viral { 
+            background-color: var(--viral-yellow); 
+            color: #000; 
+            font-family: 'Anton', sans-serif; 
+            text-transform: uppercase; 
+            font-size: 1.5rem;
+            padding: 20px;
+            border-radius: 10px;
+            border: none;
+            width: 100%; 
+            margin-top: 20px;
+            cursor: pointer;
+        }
+        .btn-viral:hover { background-color: #fff; }
         
-        .upload-area { border: 2px dashed #d1d5db; border-radius: 1rem; padding: 2rem; text-align: center; cursor: pointer; transition: 0.2s; background: #f9fafb; margin-top: 1.5rem; }
-        .upload-area:hover { border-color: #000; background: white; }
-        
-        .btn-viral { background: #000; color: #FFD700; width: 100%; padding: 1rem; border-radius: 0.75rem; border: none; font-family: 'Anton'; font-size: 1.25rem; text-transform: uppercase; margin-top: 2rem; cursor: pointer; transition: 0.2s; }
-        .btn-viral:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); background: #222; }
-        
-        .hidden { display: none; }
-        .debug-link { display: block; text-align: center; margin-top: 1rem; font-size: 0.8rem; color: #9ca3af; text-decoration: none; }
-        
-        /* Video Preview */
-        .video-box { background: #000; border-radius: 1rem; overflow: hidden; aspect-ratio: 9/16; margin-bottom: 1.5rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.2); }
-        video { width: 100%; height: 100%; object-fit: cover; }
+        .preview-container { 
+            background: #000; 
+            border: 2px solid #333;
+            border-radius: 15px; 
+            overflow: hidden; 
+            width: 100%; 
+            aspect-ratio: 9/16; 
+            margin-top: 20px;
+        }
+        .spinner-grow { color: var(--viral-yellow); }
     </style>
 </head>
 <body>
 
-<div class="main-container">
-    <h1>Viral Factory</h1>
-    <p class="subtitle">Creación de Ganchos Automatizada</p>
+<div class="main-card">
+    <h1 class="header-title">VIRAL MAKER</h1>
+    <p class="header-sub">Psicología de Atención Aplicada</p>
 
-    <?php if(!file_exists($fontPath)) echo '<div class="alert alert-warning text-center small p-1">⚠️ Falta font.ttf</div>'; ?>
-    <?php if(!file_exists($logoPath)) echo '<div class="alert alert-warning text-center small p-1">⚠️ Falta logo.png</div>'; ?>
+    <?php if (!$hasFont || !$hasLogo): ?>
+        <div class="alert alert-danger text-center small p-1">⚠️ FALTAN ARCHIVOS (logo.png / font.ttf)</div>
+    <?php endif; ?>
 
-    <div id="uiInput">
-        <form id="vForm">
-            <div>
-                <label class="form-label">Título Gancho</label>
-                <input type="text" name="videoTitle" class="viral-input" placeholder="¡ESTO ES IMPRESIONANTE!" maxlength="40" required autocomplete="off">
+    <div id="inputSection">
+        <form id="uploadForm">
+            <div class="mb-4">
+                <label class="input-label">1. Escribe el Gancho (Hook)</label>
+                <input type="text" name="videoTitle" id="titleInput" class="viral-input" placeholder="¡ESTO ES INCREÍBLE!" maxlength="40" required autocomplete="off">
+                <div class="text-end text-muted small mt-1">Se convertirá a MAYÚSCULAS automáticamente</div>
             </div>
 
-            <div class="upload-area" onclick="document.getElementById('fIn').click()">
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">📥</div>
-                <div class="fw-bold">Subir Video Vertical</div>
-                <div class="small text-muted">MP4, MOV</div>
-                <input type="file" name="videoFile" id="fIn" accept="video/*" hidden required onchange="this.parentElement.style.borderColor='#000'; this.parentElement.querySelector('.fw-bold').innerText='✅ Video Listo'">
+            <div class="mb-4">
+                <label class="input-label">2. Sube el Video</label>
+                <input class="form-control bg-dark text-white border-secondary" type="file" name="videoFile" accept="video/*" required>
             </div>
 
-            <button type="submit" class="btn-viral">🚀 Generar Video</button>
+            <button type="submit" class="btn-viral">🚀 CREAR AHORA</button>
         </form>
     </div>
 
-    <div id="uiProcess" class="hidden text-center py-5">
-        <div class="spinner-border text-dark mb-4" role="status"></div>
-        <h3 class="fw-bold">Renderizando...</h3>
-        <p class="text-muted small">Esto puede tomar 1-2 minutos.</p>
+    <div id="progressSection" class="d-none text-center py-5">
+        <div class="spinner-grow mb-3" role="status"></div>
+        <h3 class="fw-bold text-white">RENDERIZANDO...</h3>
+        <p class="text-muted small">Aplicando contraste visual y zona segura.</p>
     </div>
 
-    <div id="uiResult" class="hidden text-center">
-        <h3 class="text-success fw-bold mb-3">¡Video Generado!</h3>
-        
-        <div class="video-box">
-            <div id="vidContainer" style="width:100%; height:100%;"></div>
+    <div id="resultSection" class="d-none text-center">
+        <h3 class="fw-bold text-success">¡LISTO PARA SUBIR!</h3>
+        <div class="preview-container">
+            <div id="videoContainer" style="width:100%; height:100%;"></div>
         </div>
-
-        <a id="dlLink" href="#" class="btn-viral text-decoration-none d-block" target="_blank">
-            ⬇️ Descargar MP4
-        </a>
-        <button onclick="location.reload()" class="btn btn-link text-muted mt-3 text-decoration-none">Crear Nuevo</button>
+        <a id="downloadBtn" href="#" class="btn-viral">⬇️ DESCARGAR</a>
+        <button onclick="location.reload()" class="btn btn-link text-muted mt-3 text-decoration-none">Crear otro</button>
     </div>
-
-    <a href="?action=viewlog" target="_blank" class="debug-link">Ver Log de Errores (Si falla)</a>
 </div>
 
 <script>
-document.getElementById('vForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    if(!document.getElementById('fIn').files.length) return alert("Sube un video");
-
-    document.getElementById('uiInput').classList.add('hidden');
-    document.getElementById('uiProcess').classList.remove('hidden');
-
-    const fd = new FormData(e.target);
-    try {
-        const req = await fetch('?action=upload', { method: 'POST', body: fd });
-        const res = await req.json();
-        
-        if(res.status === 'success') {
-            track(res.jobId);
-        } else {
-            alert(res.message); location.reload();
-        }
-    } catch (err) { alert("Error de conexión"); location.reload(); }
+// Forzar mayúsculas visualmente mientras escribes
+document.getElementById('titleInput').addEventListener('input', function() {
+    this.value = this.value.toUpperCase();
 });
 
-function track(id) {
-    let t = 0;
-    const i = setInterval(async () => {
-        t++;
-        if(t > 120) { // Timeout 6 mins
-            clearInterval(i);
-            if(confirm("Tarda mucho. ¿Ver logs?")) window.open('?action=viewlog');
-            location.reload();
-        }
+const form = document.getElementById('uploadForm');
+const sections = { input: document.getElementById('inputSection'), progress: document.getElementById('progressSection'), result: document.getElementById('resultSection') };
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    sections.input.classList.add('d-none'); sections.progress.classList.remove('d-none');
+    const formData = new FormData(form);
+    try {
+        const res = await fetch('?action=upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.status === 'success') trackJob(data.jobId); else { alert(data.message); location.reload(); }
+    } catch (err) { alert('Error conexión'); location.reload(); }
+});
+
+function trackJob(jobId) {
+    let attempts = 0;
+    const interval = setInterval(async () => {
+        attempts++; if(attempts>180){clearInterval(interval);alert("Tiempo agotado");location.reload();}
         try {
-            const req = await fetch(`?action=status&jobId=${id}`);
-            const res = await req.json();
-            if(res.status === 'finished') {
-                clearInterval(i);
-                show(res.url);
-            }
-        } catch {}
+            const res = await fetch(`?action=status&jobId=${jobId}`);
+            const data = await res.json();
+            if (data.status === 'finished') { clearInterval(interval); showResult(data); }
+        } catch (e) {}
     }, 3000);
 }
 
-function show(url) {
-    document.getElementById('uiProcess').classList.add('hidden');
-    document.getElementById('uiResult').classList.remove('hidden');
-    
-    // Enlace directo al archivo
-    document.getElementById('dlLink').href = url;
-    
-    // Preview con timestamp para evitar caché
-    const prevUrl = url + '?t=' + Date.now();
-    document.getElementById('vidContainer').innerHTML = `<video width="100%" height="100%" controls autoplay muted loop playsinline><source src="${prevUrl}" type="video/mp4"></video>`;
+function showResult(data) {
+    sections.progress.classList.add('d-none'); sections.result.classList.remove('d-none');
+    document.getElementById('downloadBtn').href = data.download_url;
+    // Timestamp para evitar caché
+    const realPath = 'processed/' + data.filename + '?t=' + new Date().getTime();
+    document.getElementById('videoContainer').innerHTML = `<video width="100%" height="100%" controls autoplay muted playsinline><source src="${realPath}" type="video/mp4"></video>`;
 }
 </script>
-
 </body>
 </html>
