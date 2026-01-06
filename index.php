@@ -1,24 +1,22 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v46.0 (MASTER ENGINE + SOLID CORE)
-// Solución: Usa la versión 'GIT-MASTER' de FFmpeg que sí tiene 'drawtext'.
-// Elimina efectos de memoria (Blur) para evitar archivos corruptos (moov atom).
+// VIRAL REELS MAKER v47.0 (TERMINAL ENGINE)
+// Usa el motor 'ffmpeg' de 77MB que acabas de instalar manualmente.
 // ==========================================
 
-// Configuración de Servidor
+// Configuración Servidor Potente
 @ini_set('upload_max_filesize', '2048M');
 @ini_set('post_max_size', '2048M');
-@ini_set('max_execution_time', 1800); 
-@ini_set('memory_limit', '2048M'); 
+@ini_set('max_execution_time', 1200); 
+@ini_set('memory_limit', '4096M'); 
 @ini_set('display_errors', 0);
 
-// Directorios
+// Rutas
 $baseDir = __DIR__;
 $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
 $jobsDir = $baseDir . '/jobs'; 
-$binDir = $baseDir . '/bin'; 
-$ffmpegBin = $binDir . '/ffmpeg'; 
+$ffmpegBin = $baseDir . '/ffmpeg'; // TU ARCHIVO INSTALADO
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
 $audioPath = $baseDir . '/news.mp3';
@@ -28,7 +26,6 @@ $logFile = $baseDir . '/ffmpeg_log.txt';
 if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
 if (!file_exists($processedDir)) mkdir($processedDir, 0777, true);
 if (!file_exists($jobsDir)) mkdir($jobsDir, 0777, true);
-if (!file_exists($binDir)) mkdir($binDir, 0777, true);
 
 // Limpieza
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
@@ -39,64 +36,24 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 
 $action = $_GET['action'] ?? '';
 
-// ---> DIAGNÓSTICO MOTOR
+// ---> DIAGNÓSTICO
 $engineStatus = 'missing';
+$filterCheck = 'unknown';
+
 if (file_exists($ffmpegBin)) {
-    if (filesize($ffmpegBin) > 30000000) $engineStatus = 'installed'; // La versión Master pesa >30MB
-    else $engineStatus = 'corrupt';
-}
-
-// ---> DESCARGAR MOTOR MASTER (La versión completa que tiene drawtext)
-if ($action === 'download_engine') {
-    header('Content-Type: application/json');
-    
-    // URL de la versión GIT (Completa)
-    $url = "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz";
-    $tarFile = $baseDir . '/master.tar.xz';
-    
-    $fp = fopen($tarFile, 'w+');
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 900); // 15 minutos de timeout
-    curl_setopt($ch, CURLOPT_FILE, $fp);
-    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-    curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    fclose($fp);
-    
-    if ($httpCode !== 200 || filesize($tarFile) < 1000000) {
-        echo json_encode(['status'=>'error', 'msg'=>'Error descarga. Revisa internet.']); exit;
-    }
-    
-    shell_exec("tar -xf " . escapeshellarg($tarFile) . " -C " . escapeshellarg($binDir));
-    
-    $subDirs = glob($binDir . '/ffmpeg-*-static');
-    if (!empty($subDirs)) {
-        rename($subDirs[0] . '/ffmpeg', $ffmpegBin);
-        chmod($ffmpegBin, 0775);
-        shell_exec("rm -rf " . escapeshellarg($subDirs[0]));
-        unlink($tarFile);
-        echo json_encode(['status'=>'success']);
+    if (filesize($ffmpegBin) > 40000000) {
+        $engineStatus = 'installed';
+        if (!is_executable($ffmpegBin)) chmod($ffmpegBin, 0775);
+        
+        $check = shell_exec($ffmpegBin . " -filters 2>&1");
+        if (strpos($check, 'drawtext') !== false) {
+            $filterCheck = 'ok';
+        } else {
+            $filterCheck = 'bad_version';
+        }
     } else {
-        echo json_encode(['status'=>'error', 'msg'=>'Error al descomprimir Master.']);
+        $engineStatus = 'too_small';
     }
-    exit;
-}
-
-// ---> TESTEAR MOTOR
-if ($action === 'test_engine') {
-    header('Content-Type: application/json');
-    if (!file_exists($ffmpegBin)) { echo json_encode(['status'=>'error', 'msg'=>'Falta motor']); exit; }
-    $output = shell_exec($ffmpegBin . " -version 2>&1");
-    // Buscamos si soporta drawtext
-    $filters = shell_exec($ffmpegBin . " -filters 2>&1");
-    
-    if (strpos($filters, 'drawtext') !== false) {
-        echo json_encode(['status'=>'success', 'msg'=>'¡MOTOR PERFECTO! (Texto activado)']);
-    } else {
-        echo json_encode(['status'=>'error', 'msg'=>'Motor instalado pero sin soporte de texto.']);
-    }
-    exit;
 }
 
 // ---> DESCARGA
@@ -106,7 +63,7 @@ if ($action === 'download' && isset($_GET['file'])) {
     if (file_exists($filePath)) {
         if (ob_get_level()) ob_end_clean();
         header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="VIRAL_MASTER_'.date('Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_FINAL_'.date('Hi').'.mp4"');
         header('Content-Length: ' . filesize($filePath));
         readfile($filePath);
         exit;
@@ -117,9 +74,11 @@ if ($action === 'download' && isset($_GET['file'])) {
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    if (!file_exists($ffmpegBin)) { echo json_encode(['status'=>'error', 'msg'=>'Falta motor.']); exit; }
+    if ($engineStatus !== 'installed') {
+        echo json_encode(['status'=>'error', 'msg'=>'No encuentro el archivo ffmpeg.']); exit;
+    }
 
-    $jobId = uniqid('v46_');
+    $jobId = uniqid('v47_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -127,7 +86,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $jobFile = "$jobsDir/$jobId.json";
 
     if (!move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile)) {
-        echo json_encode(['status'=>'error', 'msg'=>'Error al subir archivo.']); exit;
+        echo json_encode(['status'=>'error', 'msg'=>'Error subida PHP.']); exit;
     }
     chmod($inputFile, 0777);
 
@@ -144,7 +103,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes 720p (Equilibrio)
+    // Ajustes 720p
     if ($count == 1) { $barH = 160; $fSize = 75; $yPos = [90]; }
     elseif ($count == 2) { $barH = 240; $fSize = 65; $yPos = [70, 145]; }
     else { $barH = 300; $fSize = 55; $yPos = [60, 130, 200]; }
@@ -156,11 +115,10 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
     
-    // 1. FONDO SÓLIDO (CLAVE PARA EVITAR CRASH)
-    // El "blur" consume demasiada RAM. Usamos negro #000000.
+    // 1. FONDO NEGRO SÓLIDO
     $filter .= "color=c=black:s=720x1280[bg];";
     
-    // 2. VIDEO CENTRAL
+    // 2. VIDEO ESCALADO
     $filter .= "[0:v]scale=720:1280:force_original_aspect_ratio=decrease{$mirrorCmd}[fg];";
     
     // 3. MEZCLA
@@ -170,7 +128,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // 4. BARRA
     $filter .= "{$lastStream}drawbox=x=0:y=40:w=iw:h={$barH}:color=black@0.9:t=fill";
 
-    // 5. TEXTO (Ahora sí funcionará con el motor Master)
+    // 5. TEXTO
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
         foreach ($lines as $i => $line) {
@@ -191,7 +149,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 7. AUDIO (Separador ';' añadido)
+    // 7. AUDIO
     if ($audioPath) {
         $mIdx = $useLogo ? "2" : "1";
         $filter .= ";[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
@@ -199,10 +157,10 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= ";[0:a]atempo=1.0[afinal]";
     }
 
-    // EJECUCIÓN (Usamos el binario descargado)
+    // EJECUCIÓN
     $cmd = "nice -n 10 " . escapeshellarg($ffmpegBin) . " -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 27 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
-    file_put_contents($logFile, "\n--- JOB $jobId (MASTER) ---\nCMD: $cmd\n", FILE_APPEND);
+    file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
     exec($cmd);
 
     file_put_contents($jobFile, json_encode(['status' => 'processing', 'file' => $outputFileName, 'start' => time()]));
@@ -210,7 +168,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// ---> ESTADO
+// ---> STATUS
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
@@ -225,7 +183,7 @@ if ($action === 'status') {
         } else {
             $logTail = shell_exec("tail -n 3 " . escapeshellarg($logFile));
             if (strpos($logTail, 'Error') !== false || strpos($logTail, 'Invalid') !== false) {
-                 echo json_encode(['status' => 'error', 'msg' => 'Error Motor: ' . substr($logTail, 0, 100)]);
+                 echo json_encode(['status' => 'error', 'msg' => 'FFmpeg Error: ' . substr($logTail, 0, 100)]);
             } elseif (time() - $data['start'] > 900) {
                  echo json_encode(['status' => 'error', 'msg' => 'Timeout.']);
             } else {
@@ -242,89 +200,74 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral v46 Master</title>
+    <title>Viral v47 Terminal</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
         body { background: #050505; color: #fff; padding: 20px; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
         .card { background: #111; border: 1px solid #333; max-width: 500px; width: 100%; padding: 25px; border-radius: 20px; }
-        h2 { color: #00ff88; text-align: center; text-transform: uppercase; font-weight: 800; }
-        .btn-action { width: 100%; padding: 15px; border-radius: 10px; border: none; font-weight: bold; cursor: pointer; margin-top: 10px; }
-        .btn-dl { background: #007bff; color: white; }
-        .btn-test { background: #ffc107; color: black; }
-        .btn-go { background: #00ff88; color: #000; }
-        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-        .bg-red { background: #dc3545; }
-        .bg-green { background: #28a745; }
-        .log-box { font-family: monospace; font-size: 0.7rem; color: #00ff88; background: #000; padding: 10px; border-radius: 5px; margin-top: 10px; min-height: 40px; word-break: break-all; }
+        .status-box { padding: 20px; text-align: center; border-radius: 10px; margin-bottom: 20px; border: 1px dashed #555; }
+        .success { border-color: #0f0; color: #0f0; background: rgba(0,255,0,0.1); }
+        .fail { border-color: #f00; color: #f00; background: rgba(255,0,0,0.1); }
+        .btn-go { width: 100%; padding: 15px; background: #0f0; color: #000; font-weight: bold; border: none; border-radius: 10px; cursor: pointer; }
         .hidden { display: none; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>Sistema v46</h2>
-    <p class="text-center text-muted small mb-4">Master Engine + Solid Core</p>
+    <h2 class="text-center mb-4 text-white">SISTEMA v47</h2>
 
-    <div class="step mb-4 p-3 border border-secondary rounded bg-dark">
-        <h6 class="text-muted text-uppercase mb-3">1. Estado del Motor</h6>
-        <div class="d-flex align-items-center mb-2">
-            <span class="status-dot <?php echo $engineStatus == 'installed' ? 'bg-green' : 'bg-red'; ?>"></span>
-            <span class="small"><?php echo $engineStatus == 'installed' ? 'INSTALADO (Master)' : 'NO INSTALADO'; ?></span>
-        </div>
-        <?php if($engineStatus != 'installed'): ?>
-            <button class="btn-dl btn-action" onclick="runAction('download_engine')">DESCARGAR MOTOR (MASTER)</button>
-        <?php else: ?>
-            <button class="btn-test btn-action" onclick="runAction('test_engine')">TESTEAR MOTOR</button>
-        <?php endif; ?>
-        <div id="log1" class="log-box">Esperando...</div>
-    </div>
-
-    <?php if($engineStatus == 'installed'): ?>
-    <div class="step p-3 border border-secondary rounded bg-dark">
-        <h6 class="text-muted text-uppercase mb-3">2. Editor</h6>
-        <input type="text" id="tIn" class="form-control bg-black text-white border-secondary mb-2" placeholder="TÍTULO GANCHO..." autocomplete="off">
-        <input type="file" id="fIn" class="form-control bg-black text-white border-secondary mb-2">
-        
-        <div class="form-check form-switch mb-2">
-            <input class="form-check-input" type="checkbox" id="mirrorCheck">
-            <label class="form-check-label text-white small">Modo Espejo</label>
+    <?php if ($engineStatus === 'installed' && $filterCheck === 'ok'): ?>
+        <div class="status-box success">
+            <h4>✅ MOTOR MASTER DETECTADO</h4>
+            <p class="small mb-0">Instalación vía Terminal exitosa.</p>
         </div>
 
-        <button class="btn-go btn-action" onclick="uploadVideo()">RENDERIZAR AHORA</button>
-    </div>
-    
-    <div id="processBox" class="hidden text-center mt-3">
-        <div class="spinner-border text-success mb-2"></div>
-        <p class="small text-muted">Procesando...</p>
-        <div id="procLog" class="log-box text-start">Iniciando...</div>
-        <a id="dlLink" href="#" class="btn-action btn-primary mt-2 d-block text-decoration-none hidden">BAJAR VIDEO</a>
-    </div>
+        <div id="uiInput">
+            <input type="text" id="tIn" class="form-control bg-dark text-white mb-3" placeholder="TÍTULO..." autocomplete="off">
+            <input type="file" id="fIn" class="form-control bg-dark text-white mb-3">
+            <div class="form-check form-switch mb-3 text-center">
+                <input class="form-check-input float-none" type="checkbox" id="mirrorCheck">
+                <label class="text-white small">Espejo</label>
+            </div>
+            <button class="btn-go" onclick="process()">RENDERIZAR</button>
+        </div>
+
+    <?php else: ?>
+        <div class="status-box fail">
+            <h4>❌ FALTA EJECUTAR COMANDOS</h4>
+            <p class="small">Abre la Consola de EasyPanel y ejecuta los comandos de instalación (wget...).</p>
+            <hr>
+            <p class="small text-start">
+                Estado: <b><?php echo $engineStatus; ?></b><br>
+                Filtros: <b><?php echo $filterCheck; ?></b>
+            </p>
+        </div>
+        <button onclick="location.reload()" class="btn btn-outline-light w-100">YA EJECUTÉ LOS COMANDOS</button>
     <?php endif; ?>
-    
-    <a href="?action=viewlog" target="_blank" class="d-block text-center mt-3 small text-decoration-none text-secondary">Ver Logs</a>
+
+    <div id="uiProcess" class="hidden text-center mt-4">
+        <div class="spinner-border text-success mb-2"></div>
+        <p>Procesando...</p>
+        <div id="log" class="small text-muted font-monospace">Iniciando...</div>
+    </div>
+
+    <div id="uiResult" class="hidden text-center mt-4">
+        <div id="vidContainer" class="ratio ratio-9x16 bg-black mb-3 border border-secondary rounded"></div>
+        <a id="dlLink" href="#" class="btn btn-primary w-100">DESCARGAR</a>
+        <button onclick="location.reload()" class="btn btn-outline-secondary w-100 mt-2">Nuevo</button>
+    </div>
 </div>
 
 <script>
-async function runAction(act) {
-    document.getElementById('log1').innerText = "Descargando... (Puede tardar 2 mins)";
-    try {
-        const res = await fetch('?action=' + act);
-        const data = await res.json();
-        document.getElementById('log1').innerText = data.msg || data.status;
-        if(data.status === 'success') setTimeout(() => location.reload(), 1500);
-    } catch(e) {
-        document.getElementById('log1').innerText = "Error de red.";
-    }
-}
-
-async function uploadVideo() {
+async function process() {
     const tIn = document.getElementById('tIn').value;
     const fIn = document.getElementById('fIn').files[0];
-    if(!fIn) return alert("Sube un video");
+    if(!fIn) return alert("Sube video");
 
-    document.getElementById('processBox').classList.remove('hidden');
-    
+    document.getElementById('uiInput').classList.add('hidden');
+    document.getElementById('uiProcess').classList.remove('hidden');
+
     const fd = new FormData();
     fd.append('videoTitle', tIn.toUpperCase());
     fd.append('videoFile', fIn);
@@ -334,10 +277,8 @@ async function uploadVideo() {
         const res = await fetch('?action=upload', {method:'POST', body:fd});
         const data = await res.json();
         if(data.status === 'success') track(data.jobId);
-        else document.getElementById('procLog').innerText = "Error: " + data.msg;
-    } catch(e) {
-        document.getElementById('procLog').innerText = "Error subida.";
-    }
+        else { alert(data.msg); location.reload(); }
+    } catch(e) { alert("Error"); location.reload(); }
 }
 
 function track(id) {
@@ -345,22 +286,19 @@ function track(id) {
         try {
             const res = await fetch(`?action=status&jobId=${id}`);
             const data = await res.json();
-            
             if(data.status === 'finished') {
                 clearInterval(i);
-                document.getElementById('procLog').innerText = "¡TERMINADO!";
-                document.getElementById('dlLink').href = '?action=download&file=' + data.file;
-                document.getElementById('dlLink').classList.remove('hidden');
+                document.getElementById('uiProcess').classList.add('hidden');
+                document.getElementById('uiResult').classList.remove('hidden');
+                document.getElementById('dlLink').href = '?action=download&file='+data.file;
+                document.getElementById('vidContainer').innerHTML = `<video src="processed/${data.file}" controls autoplay muted loop class="w-100 h-100"></video>`;
             } else if(data.status === 'error') {
                 clearInterval(i);
-                document.getElementById('procLog').innerText = data.msg;
-            } else {
-                if(data.debug) document.getElementById('procLog').innerText = "Procesando...";
+                alert(data.msg); location.reload();
             }
         } catch {}
     }, 2000);
 }
-
 document.getElementById('tIn')?.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
 </script>
 </body>
