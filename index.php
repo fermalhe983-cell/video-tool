@@ -1,6 +1,6 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v21.0 (FIX TITULOS + PESO OPTIMIZADO)
+// VIRAL REELS MAKER v22.0 (FUSION: STREAMING + SMART TITLES)
 // ==========================================
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 0);
@@ -14,15 +14,13 @@ $jobsDir = $baseDir . '/jobs';
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
 $audioPath = $baseDir . '/news.mp3';
-$logFile = $baseDir . '/debug_log.txt';
 
 // Crear carpetas
-if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); chmod($uploadDir, 0777); }
-if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); chmod($processedDir, 0777); }
-if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777); }
+if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); }
+if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); }
+if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); }
 
-// GARBAGE COLLECTOR (1 Hora de vida para el video)
-// Mantenemos el video 1 hora para que la vista previa cargue tranquila
+// Limpieza (1 Hora)
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     foreach (glob("$dir/*") as $file) {
         if (is_file($file) && (time() - filemtime($file) > 3600)) @unlink($file);
@@ -31,34 +29,55 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 
 $action = $_GET['action'] ?? '';
 
-// ---> VER LOGS
-if ($action === 'viewlog') {
-    header('Content-Type: text/plain');
-    echo file_exists($logFile) ? file_get_contents($logFile) : "Log limpio.";
+// ==========================================
+// 2. MOTOR DE VISTA PREVIA (STREAMING)
+// ==========================================
+// Este fue el código que te funcionó bien para ver el video.
+if ($action === 'stream' && isset($_GET['file'])) {
+    $file = basename($_GET['file']);
+    $filePath = "$processedDir/$file";
+    
+    if (!file_exists($filePath)) {
+        header("HTTP/1.0 404 Not Found");
+        die("Video no encontrado o procesando...");
+    }
+
+    $size = filesize($filePath);
+    header('Content-Type: video/mp4');
+    header('Accept-Ranges: bytes');
+    header('Content-Length: ' . $size);
+    // Trucos para evitar caché y errores en Chrome
+    header("Cache-Control: no-cache, must-revalidate"); 
+    header("Expires: 0"); 
+    
+    // Limpiar buffer
+    if (ob_get_level()) ob_end_clean();
+    readfile($filePath);
     exit;
 }
 
-// ---> DESCARGAR (Túnel para forzar descarga)
+// ---> DESCARGA FORZADA
 if ($action === 'download' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = "$processedDir/$file";
     if (file_exists($filePath)) {
         header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="VIRAL_FINAL_'.date('Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_FINAL_' . date('His') . '.mp4"');
         header('Content-Length: ' . filesize($filePath));
-        ob_clean(); flush(); readfile($filePath);
+        if (ob_get_level()) ob_end_clean();
+        readfile($filePath);
         exit;
     }
 }
 
-// ---> PROCESAR
+// ---> SUBIR Y PROCESAR
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
         echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
     }
 
-    $jobId = uniqid('v21_');
+    $jobId = uniqid('v22_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -66,35 +85,38 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $jobFile = "$jobsDir/$jobId.json";
 
     move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile);
-    chmod($inputFile, 0777);
 
     // Recursos
     $useLogo = file_exists($logoPath);
     $useFont = file_exists($fontPath);
     $useAudio = file_exists($audioPath);
 
-    // --- LÓGICA DE TÍTULO (MANUAL Y ROBUSTA) ---
+    // --- LÓGICA DE TEXTO MEJORADA (MANUAL) ---
     $rawTitle = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
-    $rawTitle = mb_strtoupper($rawTitle);
+    $rawTitle = mb_strtoupper($rawTitle); // Mayúsculas
     
-    // Cortamos a 16 caracteres para asegurar buen tamaño
-    $wrappedText = wordwrap($rawTitle, 16, "\n", true);
+    // 1. Envolver texto (18 caracteres por línea es el estándar de oro)
+    $wrappedText = wordwrap($rawTitle, 18, "\n", true);
     $lines = explode("\n", $wrappedText);
     
-    // Máximo 3 líneas
+    // 2. Limitar a 3 líneas máx
     if (count($lines) > 3) {
         $lines = array_slice($lines, 0, 3);
         $lines[2] .= "..";
     }
-    $lineCount = count($lines);
+    $count = count($lines);
 
-    // Configuración Dinámica (Altura de barra y Posiciones)
-    if ($lineCount == 1) {
-        $barHeight = 220; $fontSize = 90; $yPositions = [140];
-    } elseif ($lineCount == 2) {
-        $barHeight = 300; $fontSize = 80; $yPositions = [110, 210];
+    // 3. Configuración Geométrica (Matemática Pura)
+    // Definimos altura de barra y posiciones Y exactas para cada caso
+    if ($count == 1) {
+        $barH = 220; $fSize = 95; 
+        $yPos = [140]; // Una línea centrada
+    } elseif ($count == 2) {
+        $barH = 300; $fSize = 85; 
+        $yPos = [110, 210]; // Dos líneas distribuidas
     } else {
-        $barHeight = 380; $fontSize = 65; $yPositions = [100, 190, 280];
+        $barH = 380; $fSize = 70; 
+        $yPos = [100, 190, 280]; // Tres líneas apretadas
     }
 
     // --- COMANDO FFMPEG ---
@@ -104,53 +126,58 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $filter = "";
     
-    // 1. OPTIMIZACIÓN DE PESO Y CALIDAD
-    // Reduje noise a 5 (antes 10) para bajar peso.
+    // 1. BASE + CALIDAD (Optimizada para peso)
+    // noise=alls=2: Ruido al 2% (Suficiente para Meta, ligero para descarga)
+    // crf 28: Compresión inteligente
     $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg];";
-    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,eq=contrast=1.1:saturation=1.2,noise=alls=5:allf=t+u[fg];";
+    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,eq=contrast=1.1:saturation=1.2,noise=alls=2:allf=t+u[fg];";
     $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
     $lastStream = "[base]";
 
-    // 2. BARRA NEGRA (Tamaño dinámico calculado arriba)
-    $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h={$barHeight}:color=black@0.9:t=fill[bar];";
+    // 2. BARRA NEGRA (Variable según texto)
+    $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h={$barH}:color=black@0.9:t=fill[bar];";
     $lastStream = "[bar]";
 
-    // 3. LOGO (Centrado verticalmente en la barra)
+    // 3. LOGO
     if ($useLogo) {
         $filter .= "[1:v]scale=-1:130[logo_s];";
-        $logoY = 60 + ($barHeight/2) - 65; 
+        $logoY = 60 + ($barH/2) - 65; // Centrado exacto en la barra
         $filter .= "{$lastStream}[logo_s]overlay=40:{$logoY}[wlogo];";
         $lastStream = "[wlogo]";
     }
 
-    // 4. TEXTO MANUAL (Loop para garantizar líneas separadas)
+    // 4. TEXTO (Loop Manual)
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        $xPos = $useLogo ? "(w-text_w)/2+70" : "(w-text_w)/2";
+        $xPos = $useLogo ? "(w-text_w)/2+70" : "(w-text_w)/2"; // Si hay logo, mueve el texto a la derecha
         
-        foreach ($lines as $index => $line) {
-            $y = $yPositions[$index];
-            $streamName = ($index == $lineCount - 1) ? "titled" : "t{$index}";
-            $prevStream = ($index == 0) ? $lastStream : "[t".($index-1)."]";
+        foreach ($lines as $i => $line) {
+            $y = $yPos[$i];
+            $streamOut = ($i == $count - 1) ? "titled" : "txt{$i}";
+            $streamIn = ($i == 0) ? $lastStream : "[txt".($i-1)."]";
             
-            // Texto amarillo viral
-            $draw = "drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fontSize}:borderw=5:bordercolor=black:x={$xPos}:y={$y}";
-            $filter .= "{$prevStream}{$draw}[{$streamName}];";
+            // Texto Amarillo + Borde Negro
+            $draw = "drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=5:bordercolor=black:x={$xPos}:y={$y}";
+            $filter .= "{$streamIn}{$draw}[{$streamOut}];";
         }
         $lastStream = "[titled]";
     }
 
-    // 5. AUDIO
+    // 5. AUDIO & OUTPUT
     $filter .= "{$lastStream}setpts=0.94*PTS[vfinal];";
+    
     if ($useAudio) {
         $mIdx = $useLogo ? "2" : "1";
-        $filter .= "[{$mIdx}:a]volume=0.15[bgmusic];[0:a]volume=1.0[voice];[voice][bgmusic]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
+        // Música al 10% (Muy suave fondo)
+        $filter .= "[{$mIdx}:a]volume=0.1[bgmusic];[0:a]volume=1.0[voice];[voice][bgmusic]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
         $filter .= "[0:a]atempo=1.0638[afinal]";
     }
 
-    // EJECUCIÓN (Usamos 'veryfast' en vez de 'ultrafast' para mejor compresión/peso)
-    $cmd = "ffmpeg -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset veryfast -r 30 -pix_fmt yuv420p -c:a aac -ar 44100 -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
+    // EJECUCIÓN OPTIMIZADA
+    // -preset veryfast: Rápido pero comprime mejor que ultrafast.
+    // -crf 28: Menor peso, calidad buena para celular.
+    $cmd = "ffmpeg -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset veryfast -crf 28 -r 30 -pix_fmt yuv420p -c:a aac -ar 44100 -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " > /dev/null 2>&1 &";
 
     exec($cmd);
 
@@ -163,13 +190,10 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
-    
     if (file_exists($jFile)) {
         $data = json_decode(file_get_contents($jFile), true);
-        $fullPath = "$processedDir/" . $data['file'];
-        
-        if (file_exists($fullPath) && filesize($fullPath) > 51200) {
-            chmod($fullPath, 0777); // PERMISO TOTAL PARA VISTA PREVIA
+        // Verificar si existe y tiene peso mínimo
+        if (file_exists("$processedDir/" . $data['file']) && filesize("$processedDir/" . $data['file']) > 10000) {
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
             echo json_encode(['status' => 'processing']);
@@ -184,12 +208,12 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Reels v21</title>
+    <title>Viral Fusion v22</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
         body { background-color: #000; font-family: 'Inter', sans-serif; color: white; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        .main-card { background: #111; width: 100%; max-width: 500px; border: 2px solid #333; border-radius: 20px; padding: 30px; }
+        .main-card { background: #111; width: 100%; max-width: 500px; border: 2px solid #333; border-radius: 20px; padding: 30px; box-shadow: 0 0 40px rgba(255, 215, 0, 0.1); }
         .header-title { font-family: 'Anton', sans-serif; text-align: center; color: #FFD700; font-size: 2.5rem; text-transform: uppercase; margin: 0; }
         .header-sub { text-align: center; color: #666; font-size: 0.8rem; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 30px; }
         
@@ -200,8 +224,8 @@ if ($action === 'status') {
         .upload-area { border: 2px dashed #444; border-radius: 10px; padding: 20px; text-align: center; margin-top: 20px; cursor: pointer; transition: 0.2s; }
         .upload-area:hover { background: #1a1a1a; border-color: #fff; }
 
-        .btn-viral { background: #FFD700; color: #000; border: none; width: 100%; padding: 20px; font-family: 'Anton'; font-size: 1.5rem; text-transform: uppercase; border-radius: 10px; margin-top: 25px; cursor: pointer; }
-        .btn-viral:hover { background: #fff; }
+        .btn-viral { background: #FFD700; color: #000; border: none; width: 100%; padding: 20px; font-family: 'Anton'; font-size: 1.5rem; text-transform: uppercase; border-radius: 10px; margin-top: 25px; cursor: pointer; transition: 0.3s; }
+        .btn-viral:hover { background: #fff; transform: scale(1.02); }
 
         .video-box { background: #000; border: 2px solid #333; border-radius: 15px; overflow: hidden; width: 100%; aspect-ratio: 9/16; margin-bottom: 20px; }
         video { width: 100%; height: 100%; object-fit: cover; }
@@ -211,16 +235,16 @@ if ($action === 'status') {
 <body>
 
 <div class="main-card">
-    <h1 class="header-title">Viral v21</h1>
-    <p class="header-sub">Restaurado & Optimizado</p>
+    <h1 class="header-title">FUSION v22</h1>
+    <p class="header-sub">Texto Inteligente + Streaming</p>
 
     <?php if(!file_exists($audioPath)) echo '<div class="alert alert-warning p-1 text-center small">⚠️ Falta news.mp3</div>'; ?>
 
     <div id="uiInput">
         <form id="vForm">
             <div>
-                <label class="form-label">Título (Se ajusta solo)</label>
-                <input type="text" name="videoTitle" id="tIn" class="viral-input" placeholder="ESCRIBE TU TÍTULO AQUÍ..." maxlength="60" required autocomplete="off">
+                <label class="form-label">Título (Detecta líneas auto)</label>
+                <textarea name="videoTitle" id="tIn" class="viral-input" rows="2" placeholder="ESCRIBE TU TÍTULO AQUÍ..." required></textarea>
             </div>
 
             <div class="upload-area" onclick="document.getElementById('fIn').click()">
@@ -235,8 +259,8 @@ if ($action === 'status') {
 
     <div id="uiProcess" class="hidden text-center py-5">
         <div class="spinner-grow text-warning mb-3"></div>
-        <h3 class="fw-bold">Produciendo...</h3>
-        <p class="text-muted small">Generando video optimizado.</p>
+        <h3 class="fw-bold">Renderizando...</h3>
+        <p class="text-muted small">Creando viral ligero y optimizado.</p>
     </div>
 
     <div id="uiResult" class="hidden text-center">
@@ -248,8 +272,6 @@ if ($action === 'status') {
         <a id="dlBtn" href="#" class="btn-viral text-decoration-none d-block">⬇️ Descargar MP4</a>
         <button onclick="location.reload()" class="btn btn-link text-muted mt-3 text-decoration-none">Crear otro</button>
     </div>
-
-    <a href="?action=viewlog" target="_blank" class="d-block text-center mt-3 text-secondary text-decoration-none small">Ver Logs</a>
 </div>
 
 <script>
@@ -291,16 +313,13 @@ function show(filename) {
     document.getElementById('uiProcess').classList.add('hidden');
     document.getElementById('uiResult').classList.remove('hidden');
     
-    // Vista Previa DIRECTA (Más estable)
-    const directUrl = 'processed/' + filename;
-    // Enlace de Descarga (Túnel PHP)
-    const downloadUrl = '?action=download&file=' + filename;
+    // 1. URL STREAMING (Para vista previa instantánea)
+    const streamUrl = `?action=stream&file=${filename}&t=${Date.now()}`;
+    // 2. URL DESCARGA
+    const dlUrl = `?action=download&file=${filename}`;
     
-    document.getElementById('dlBtn').href = downloadUrl;
-    
-    // Timestamp para evitar caché y forzar carga
-    const prevUrl = directUrl + '?t=' + Date.now();
-    document.getElementById('vidWrap').innerHTML = `<video width="100%" height="100%" controls autoplay muted loop playsinline><source src="${prevUrl}" type="video/mp4"></video>`;
+    document.getElementById('dlBtn').href = dlUrl;
+    document.getElementById('vidWrap').innerHTML = `<video width="100%" height="100%" controls autoplay muted loop playsinline><source src="${streamUrl}" type="video/mp4"></video>`;
 }
 </script>
 </body>
