@@ -1,6 +1,6 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v17.0 (AUTO-WRAP TEXT + BACKGROUND MUSIC)
+// VIRAL REELS MAKER v18.0 (3-LINES SUPPORT + META COMPLIANCE)
 // ==========================================
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 0);
@@ -13,7 +13,7 @@ $processedDir = $baseDir . '/processed';
 $jobsDir = $baseDir . '/jobs'; 
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
-$audioPath = $baseDir . '/news.mp3'; // NUEVO: Archivo de audio de fondo
+$audioPath = $baseDir . '/news.mp3';
 $logFile = $baseDir . '/debug_log.txt';
 
 // Crear carpetas
@@ -21,7 +21,7 @@ if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); chmod($uploadDir,
 if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); chmod($processedDir, 0777); }
 if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777); }
 
-// RECOLECTOR DE BASURA (10 mins)
+// GARBAGE COLLECTOR (10 mins)
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     foreach (glob("$dir/*") as $file) {
         if (is_file($file) && (time() - filemtime($file) > 600)) @unlink($file);
@@ -30,22 +30,21 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 
 $action = $_GET['action'] ?? '';
 
-// ---> VER LOGS
+// ---> LOGS
 if ($action === 'viewlog') {
     header('Content-Type: text/plain');
-    echo file_exists($logFile) ? file_get_contents($logFile) : "Log vacío.";
+    echo file_exists($logFile) ? file_get_contents($logFile) : "Log limpio.";
     exit;
 }
 
-// ---> SUBIR Y PROCESAR
+// ---> SUBIR
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
-    
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
         echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
     }
 
-    $jobId = uniqid('v17_');
+    $jobId = uniqid('v18_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -62,102 +61,96 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $useFont = file_exists($fontPath);
     $useAudio = file_exists($audioPath);
 
-    // --- PROCESAMIENTO DEL TÍTULO (AUTO-WRAP) ---
-    // Limpiamos y convertimos a mayúsculas
+    // --- LÓGICA DE TEXTO (3 LÍNEAS) ---
     $rawTitle = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
     $rawTitle = mb_strtoupper($rawTitle);
     
-    // Dividimos en líneas de máximo 18 caracteres (para que quepan bien grandes)
-    // wordwrap devuelve un string con saltos de línea (\n)
-    $wrappedText = wordwrap($rawTitle, 18, "\n", true);
-    $lines = explode("\n", $wrappedText); // Convertimos a array
+    // Envolvemos a 15 caracteres para forzar saltos de línea en frases largas
+    $wrappedText = wordwrap($rawTitle, 15, "\n", true);
+    $lines = explode("\n", $wrappedText);
     
-    // Limitamos a máximo 2 líneas para no tapar el video (Psicología visual)
-    if (count($lines) > 2) {
-        $lines = array_slice($lines, 0, 2); 
-        $lines[1] .= "..."; // Indicador de corte si es muy largo
+    // Máximo 3 líneas
+    if (count($lines) > 3) {
+        $lines = array_slice($lines, 0, 3);
+        $lines[2] .= "..";
+    }
+    $lineCount = count($lines);
+
+    // Configuración Dinámica según cantidad de líneas
+    // Altura de barra y Tamaño de fuente
+    if ($lineCount == 1) {
+        $barHeight = 220;
+        $fontSize = 90;
+        $yPositions = [140]; // Centro
+    } elseif ($lineCount == 2) {
+        $barHeight = 280;
+        $fontSize = 80;
+        $yPositions = [110, 200]; // Arriba, Abajo
+    } else {
+        // 3 LÍNEAS (Tu caso específico)
+        $barHeight = 360; // Barra más grande
+        $fontSize = 65;   // Letra más pequeña para que quepa
+        $yPositions = [100, 180, 260]; // Distribución
     }
 
-    // --- COMANDO FFMPEG ---
-    // Input 0: Video
+    // --- FFMPEG ---
     $inputs = "-i " . escapeshellarg($inputFile);
-    // Input 1: Logo (si existe)
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
-    // Input 2: Música de fondo (si existe) - Usamos -stream_loop -1 para que se repita infinita
     if ($useAudio) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
 
-    // FILTROS
     $filter = "";
     
-    // 1. VIDEO BASE (Blur + Centrado)
+    // 1. MEJORA DE CALIDAD (Color Grading + Noise)
+    // eq=contrast=1.1:saturation=1.2 -> Colores más vivos (Quality)
+    // noise=alls=10 -> Grano sutil (Hash Único)
     $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg];";
-    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease[fg];";
+    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,eq=contrast=1.1:saturation=1.2,noise=alls=10:allf=t+u[fg];";
     $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
     $lastStream = "[base]";
 
-    // 2. BARRA NEGRA (Aumentada a 280px para soportar 2 líneas de texto)
-    $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h=280:color=black@0.9:t=fill[bar];";
+    // 2. BARRA NEGRA DINÁMICA
+    $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h={$barHeight}:color=black@0.9:t=fill[bar];";
     $lastStream = "[bar]";
 
     // 3. LOGO
     if ($useLogo) {
-        $filter .= "[1:v]scale=-1:140[logo_s];";
-        $filter .= "{$lastStream}[logo_s]overlay=40:120[wlogo];";
+        $filter .= "[1:v]scale=-1:130[logo_s];";
+        // Ajustamos posición del logo según la altura de la barra
+        $logoY = 60 + ($barHeight/2) - 65; // Centrado vertical en la barra
+        $filter .= "{$lastStream}[logo_s]overlay=40:{$logoY}[wlogo];";
         $lastStream = "[wlogo]";
     }
 
-    // 4. TEXTO INTELIGENTE (1 o 2 líneas)
+    // 4. TEXTO DINÁMICO
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        // Posición X: Si hay logo, movemos a la derecha (+80), si no, centrado exacto.
         $xPos = $useLogo ? "(w-text_w)/2+70" : "(w-text_w)/2";
         
-        if (count($lines) === 1) {
-            // UNA SOLA LÍNEA (Centrada verticalmente en la barra)
-            // y=160 (aprox centro de barra que va de 60 a 340)
-            $txt = $lines[0];
-            $draw = "drawtext=fontfile='$fontSafe':text='$txt':fontcolor=#FFD700:fontsize=90:borderw=5:bordercolor=black:x=$xPos:y=160";
-            $filter .= "{$lastStream}{$draw}[titled];";
-            $lastStream = "[titled]";
-        } else {
-            // DOS LÍNEAS (Una arriba, una abajo)
-            // Línea 1
-            $txt1 = $lines[0];
-            // Línea 2
-            $txt2 = $lines[1];
+        foreach ($lines as $index => $line) {
+            $y = $yPositions[$index];
+            $streamName = ($index == $lineCount - 1) ? "titled" : "t{$index}";
+            $prevStream = ($index == 0) ? $lastStream : "[t".($index-1)."]";
             
-            // fontsize=80 (Un poco más pequeña para que quepan dos)
-            $draw1 = "drawtext=fontfile='$fontSafe':text='$txt1':fontcolor=#FFD700:fontsize=80:borderw=5:bordercolor=black:x=$xPos:y=110";
-            $filter .= "{$lastStream}{$draw1}[t1];";
-            
-            $draw2 = "drawtext=fontfile='$fontSafe':text='$txt2':fontcolor=#FFD700:fontsize=80:borderw=5:bordercolor=black:x=$xPos:y=200";
-            $filter .= "[t1]{$draw2}[titled];";
-            $lastStream = "[titled]";
+            $draw = "drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fontSize}:borderw=5:bordercolor=black:x={$xPos}:y={$y}";
+            $filter .= "{$prevStream}{$draw}[{$streamName}];";
         }
+        $lastStream = "[titled]";
     }
 
-    // 5. VIDEO FINAL (Aceleración)
+    // 5. ACELERACIÓN
     $filter .= "{$lastStream}setpts=0.94*PTS[vfinal];";
 
-    // 6. AUDIO MIX (Mezcla Profesional)
+    // 6. AUDIO MIX
     if ($useAudio) {
-        // [0:a] es la voz original (Volumen 1.0)
-        // [2:a] es la música (Volumen 0.15 = Suave)
-        // amix=inputs=2:duration=first (Corta la música cuando termina el video)
-        // Map [2:a] as input index depends on if logo exists. 
-        // If logo exists, inputs are 0,1,2. Music is 2.
-        // If logo NO exists, inputs are 0,1. Music is 1.
         $musicIndex = $useLogo ? "2" : "1";
-        
-        $filter .= "[{$musicIndex}:a]volume=0.15[bgmusic];"; // Baja el volumen de la música
-        $filter .= "[0:a]volume=1.0[voice];"; // Mantiene la voz normal
+        $filter .= "[{$musicIndex}:a]volume=0.15[bgmusic];"; 
+        $filter .= "[0:a]volume=1.0[voice];"; 
         $filter .= "[voice][bgmusic]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
-        // Si no hay música, solo procesamos el audio original
         $filter .= "[0:a]atempo=1.0638[afinal]";
     }
 
-    // EJECUTAR
+    // EJECUCIÓN
     $cmd = "ffmpeg -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -r 30 -pix_fmt yuv420p -c:a aac -ar 44100 -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     exec($cmd);
@@ -194,7 +187,7 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral News Maker</title>
+    <title>Viral News v18</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
@@ -221,33 +214,33 @@ if ($action === 'status') {
 <body>
 
 <div class="main-card">
-    <h1 class="header-title">Viral News</h1>
-    <p class="header-sub">Texto Dinámico + Audio Mix</p>
+    <h1 class="header-title">Meta Viral v18</h1>
+    <p class="header-sub">Calidad Mejorada + Multi-Línea</p>
 
-    <?php if(!file_exists($audioPath)) echo '<div class="alert alert-warning p-1 text-center small">⚠️ Falta news.mp3 (No habrá música de fondo)</div>'; ?>
+    <?php if(!file_exists($audioPath)) echo '<div class="alert alert-warning p-1 text-center small">⚠️ Falta news.mp3</div>'; ?>
 
     <div id="uiInput">
         <form id="vForm">
             <div>
                 <label class="form-label">Título de la Noticia</label>
-                <input type="text" name="videoTitle" id="tIn" class="viral-input" placeholder="¡ESCRIBE ALGO LARGO PARA PROBAR!" maxlength="50" required autocomplete="off">
-                <div class="text-end text-muted small mt-1">Se ajustará a 2 líneas si es necesario</div>
+                <input type="text" name="videoTitle" id="tIn" class="viral-input" placeholder="VENEZOLANOS EN CALI ENOJADOS POR TRUMP" maxlength="60" required autocomplete="off">
+                <div class="text-end text-muted small mt-1">Soporta hasta 3 líneas automáticas</div>
             </div>
 
             <div class="upload-area" onclick="document.getElementById('fIn').click()">
                 <div class="fs-1">📂</div>
-                <div class="fw-bold mt-2">Subir Video Original</div>
+                <div class="fw-bold mt-2">Subir Video</div>
                 <input type="file" name="videoFile" id="fIn" accept="video/*" hidden required onchange="this.parentElement.style.borderColor='#FFD700'; this.parentElement.querySelector('.fw-bold').innerText='✅ Video Listo'">
             </div>
 
-            <button type="submit" class="btn-viral">🚀 PROCESAR AHORA</button>
+            <button type="submit" class="btn-viral">🚀 PROCESAR</button>
         </form>
     </div>
 
     <div id="uiProcess" class="hidden text-center py-5">
         <div class="spinner-grow text-warning mb-3"></div>
         <h3 class="fw-bold">Produciendo...</h3>
-        <p class="text-muted small">Mezclando audio y ajustando textos.</p>
+        <p class="text-muted small">Aplicando color grading, mezcla de audio y textos.</p>
     </div>
 
     <div id="uiResult" class="hidden text-center">
