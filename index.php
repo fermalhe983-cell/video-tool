@@ -5,9 +5,10 @@
 // ==========================================
 
 // 1. CONFIGURACIÓN DE SERVIDOR PARA ARCHIVOS PESADOS
-@ini_set('upload_max_filesize', '512M');
-@ini_set('post_max_size', '512M');
-@ini_set('max_input_time', 300); // 5 minutos de subida
+// Intentamos forzar límites altos para evitar errores de subida
+@ini_set('upload_max_filesize', '1024M'); // 1GB
+@ini_set('post_max_size', '1024M');
+@ini_set('max_input_time', 600); // 10 minutos de subida
 @ini_set('max_execution_time', 600); // 10 minutos de proceso
 @ini_set('memory_limit', '2048M');
 @ini_set('display_errors', 0);
@@ -60,7 +61,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
         $errCode = $_FILES['videoFile']['error'] ?? 'No file';
         $errMsg = 'Error desconocido';
-        if ($errCode == UPLOAD_ERR_INI_SIZE) $errMsg = 'El archivo es demasiado grande para el servidor (php.ini limit).';
+        if ($errCode == UPLOAD_ERR_INI_SIZE) $errMsg = 'El archivo es demasiado grande para la configuración del servidor.';
         if ($errCode == UPLOAD_ERR_PARTIAL) $errMsg = 'La subida se interrumpió.';
         if ($errCode == UPLOAD_ERR_NO_FILE) $errMsg = 'No se envió ningún archivo.';
         echo json_encode(['status' => 'error', 'message' => "Error subida ($errCode): $errMsg"]); 
@@ -105,23 +106,18 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
     if ($useAudio) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
 
-    // TRUCO DE INGENIERÍA:
-    // 1. Forzamos todo video entrante a convertirse en una caja segura.
-    // 2. Usamos 'trunc(iw/2)*2' para asegurar dimensiones pares (evita error "width not divisible by 2").
-    // 3. Normalizamos frame rate a 30 para estabilidad.
-    
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
 
     // PASO A: Crear FONDO Borroso (Background)
-    // Escalamos para llenar 1080x1920 sin importar el origen, luego crop y blur
+    // Esto asegura que CUALQUIER video (horizontal, cuadrado) llene la pantalla 9:16
     $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10{$mirrorCmd}[bg];";
 
     // PASO B: Preparar VIDEO PRINCIPAL (Foreground)
-    // Escalamos para que quepa DENTRO de 1080x1920 sin cortarse.
-    // 'pad' centra el video si es horizontal o cuadrado.
+    // Escalamos para que quepa DENTRO de 1080x1920 sin cortarse (decrease).
+    // 'pad' centra el video si es horizontal.
+    // eq/noise cambia el hash del video.
     $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,setsar=1";
-    // Aplicamos filtros de "unicidad" (contraste, ruido, espejo)
     $filter .= ",eq=contrast=1.05:saturation=1.1,noise=alls=1:allf=t+u{$mirrorCmd}[fg];";
 
     // PASO C: Unir Fondo + Frente
@@ -149,7 +145,6 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $y = $yPos[$i];
             $streamOut = ($i == $count - 1) ? "titled" : "txt{$i}";
             $streamIn = ($i == 0) ? $lastStream : "[txt".($i-1)."]";
-            // shadow para mejor lectura
             $draw = "drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=2:shadowy=2:x={$xPos}:y={$y}";
             $filter .= "{$streamIn}{$draw}[{$streamOut}];";
         }
@@ -157,21 +152,19 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // PASO G: Audio Mix
-    $filter .= "{$lastStream}setpts=0.95*PTS[vfinal];"; // Ligera aceleración video
+    $filter .= "{$lastStream}setpts=0.95*PTS[vfinal];"; 
     if ($useAudio) {
-        $mIdx = $useLogo ? "2" : "1"; // Índice del audio de fondo
-        // [0:a] Voz principal (Vol 1.0)
-        // [X:a] Música fondo (Vol 0.12)
-        // amix con duration=first para cortar la música cuando acabe el video
+        $mIdx = $useLogo ? "2" : "1"; 
+        // [0:a] Voz original (Vol 1.0)
+        // [X:a] Música fondo (Vol 0.12 = muy suave)
         $filter .= "[{$mIdx}:a]volume=0.12[bgmusic];[0:a]volume=1.0[voice];[voice][bgmusic]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
-        $filter .= "[0:a]atempo=1.0526[afinal]"; // Aceleración audio sync
+        $filter .= "[0:a]atempo=1.0526[afinal]"; 
     }
 
     // COMANDO FINAL OPTIMIZADO PARA ESTABILIDAD
-    // -preset ultrafast: Clave para que el servidor no haga timeout con archivos grandes
+    // -preset ultrafast: Clave para que el servidor no haga timeout
     // -pix_fmt yuv420p: Compatibilidad universal
-    // -ac 2: Audio estereo estándar
     $cmd = "nice -n 19 ffmpeg -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -crf 28 -r 30 -pix_fmt yuv420p -c:a aac -ar 44100 -ac 2 -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " > /dev/null 2>&1 &";
 
     exec($cmd);
@@ -190,17 +183,11 @@ if ($action === 'status') {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
         
-        // Verificamos si existe y si ha dejado de crecer (o es suficientemente grande)
-        // En servidores rápidos, comprobar solo existencia + tamaño mínimo es suficiente.
         if (file_exists($fullPath) && filesize($fullPath) > 102400) { // >100KB
-            // Dar permisos de lectura pública
             chmod($fullPath, 0777); 
-            
-            // Verificamos si ffmpeg sigue escribiendo (opcional, pero seguro)
-            // Simplemente devolvemos finished y dejamos que el frontend maneje la espera visual
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
-            // Check timeout interno (si lleva más de 10 mins procesando, dar error)
+            // Check timeout interno
             if (time() - $data['start'] > 600) {
                  echo json_encode(['status' => 'error', 'message' => 'Timeout procesando']);
             } else {
