@@ -1,8 +1,8 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v43.0 (STANDALONE DIAGNOSTIC)
-// Solución: Evita tocar el sistema operativo. Usa binarios portátiles.
-// Incluye herramientas de diagnóstico para ver por qué falla.
+// VIRAL REELS MAKER v44.0 (SYNTAX FIXED)
+// Corrección: Agregado el separador ';' faltante entre video y audio.
+// Estado: Motor funcionando, Memoria estable.
 // ==========================================
 
 // Configuración
@@ -18,9 +18,10 @@ $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
 $jobsDir = $baseDir . '/jobs'; 
 $binDir = $baseDir . '/bin'; 
-$ffmpegBin = $binDir . '/ffmpeg'; // Nuestro motor privado
+$ffmpegBin = $binDir . '/ffmpeg'; 
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
+$audioPath = $baseDir . '/news.mp3';
 $logFile = $baseDir . '/process_log.txt';
 
 // Crear carpetas
@@ -38,21 +39,19 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 
 $action = $_GET['action'] ?? '';
 
-// ---> DIAGNÓSTICO: ¿Tenemos motor?
+// ---> DIAGNÓSTICO
 $engineStatus = 'missing';
 if (file_exists($ffmpegBin)) {
     if (filesize($ffmpegBin) > 10000000) $engineStatus = 'installed';
     else $engineStatus = 'corrupt';
 }
 
-// ---> ACCIÓN 1: DESCARGAR MOTOR (Sin apt-get)
+// ---> DESCARGAR MOTOR
 if ($action === 'download_engine') {
     header('Content-Type: application/json');
-    
     $url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
     $tarFile = $baseDir . '/engine.tar.xz';
     
-    // Descarga con Curl
     $fp = fopen($tarFile, 'w+');
     $ch = curl_init($url);
     curl_setopt($ch, CURLOPT_TIMEOUT, 600);
@@ -64,49 +63,58 @@ if ($action === 'download_engine') {
     fclose($fp);
     
     if ($httpCode !== 200 || filesize($tarFile) < 1000000) {
-        echo json_encode(['status'=>'error', 'msg'=>'Error descarga (Code: '.$httpCode.')']); exit;
+        echo json_encode(['status'=>'error', 'msg'=>'Error descarga.']); exit;
     }
     
-    // Descomprimir
     shell_exec("tar -xf " . escapeshellarg($tarFile) . " -C " . escapeshellarg($binDir));
     
-    // Mover y limpiar
     $subDirs = glob($binDir . '/ffmpeg-*-static');
     if (!empty($subDirs)) {
         rename($subDirs[0] . '/ffmpeg', $ffmpegBin);
-        chmod($ffmpegBin, 0775); // Permisos de ejecución
+        chmod($ffmpegBin, 0775);
         shell_exec("rm -rf " . escapeshellarg($subDirs[0]));
         unlink($tarFile);
         echo json_encode(['status'=>'success']);
     } else {
-        echo json_encode(['status'=>'error', 'msg'=>'Error al descomprimir archivo.']);
+        echo json_encode(['status'=>'error', 'msg'=>'Error descomprimir.']);
     }
     exit;
 }
 
-// ---> ACCIÓN 2: TESTEAR MOTOR
+// ---> TESTEAR MOTOR
 if ($action === 'test_engine') {
     header('Content-Type: application/json');
-    if (!file_exists($ffmpegBin)) { echo json_encode(['status'=>'error', 'msg'=>'No existe el archivo ffmpeg']); exit; }
-    
-    // Ejecuta el comando de versión
+    if (!file_exists($ffmpegBin)) { echo json_encode(['status'=>'error', 'msg'=>'No existe ffmpeg']); exit; }
     $output = shell_exec($ffmpegBin . " -version 2>&1");
-    
     if (strpos($output, 'ffmpeg version') !== false) {
-        echo json_encode(['status'=>'success', 'msg'=>'¡MOTOR OPERATIVO! ' . substr($output, 0, 20)]);
+        echo json_encode(['status'=>'success', 'msg'=>'¡MOTOR OK!']);
     } else {
-        echo json_encode(['status'=>'error', 'msg'=>'El motor no arranca. Permisos o arquitectura incorrecta.']);
+        echo json_encode(['status'=>'error', 'msg'=>'Motor corrupto.']);
     }
     exit;
 }
 
-// ---> ACCIÓN 3: PROCESAR VIDEO
+// ---> DESCARGA VIDEO
+if ($action === 'download' && isset($_GET['file'])) {
+    $file = basename($_GET['file']);
+    $filePath = "$processedDir/$file";
+    if (file_exists($filePath)) {
+        if (ob_get_level()) ob_end_clean();
+        header('Content-Type: video/mp4');
+        header('Content-Disposition: attachment; filename="VIRAL_FINAL_'.date('Hi').'.mp4"');
+        header('Content-Length: ' . filesize($filePath));
+        readfile($filePath);
+        exit;
+    }
+}
+
+// ---> SUBIDA
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    if (!file_exists($ffmpegBin)) { echo json_encode(['status'=>'error', 'msg'=>'Falta el motor.']); exit; }
+    if (!file_exists($ffmpegBin)) { echo json_encode(['status'=>'error', 'msg'=>'Falta motor.']); exit; }
 
-    $jobId = uniqid('v43_');
+    $jobId = uniqid('v44_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -120,6 +128,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $useLogo = file_exists($logoPath);
     $useFont = file_exists($fontPath);
     $audioPath = file_exists($audioPath) ? $audioPath : false;
+    $useMirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     
     // Texto
     $rawTitle = mb_strtoupper($_POST['videoTitle'] ?? '');
@@ -128,7 +137,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes 720p (Seguro para 16GB RAM)
+    // Ajustes 720p
     if ($count == 1) { $barH = 160; $fSize = 75; $yPos = [90]; }
     elseif ($count == 2) { $barH = 240; $fSize = 65; $yPos = [70, 145]; }
     else { $barH = 300; $fSize = 55; $yPos = [60, 130, 200]; }
@@ -137,13 +146,14 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
     if ($audioPath) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
 
+    $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
     
-    // 1. FONDO OSCURO (Cero RAM)
+    // 1. FONDO OSCURO
     $filter .= "color=c=#111111:s=720x1280[bg];";
     
-    // 2. VIDEO ESCALADO
-    $filter .= "[0:v]scale=720:1280:force_original_aspect_ratio=decrease[fg];";
+    // 2. VIDEO
+    $filter .= "[0:v]scale=720:1280:force_original_aspect_ratio=decrease{$mirrorCmd}[fg];";
     
     // 3. MEZCLA
     $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[base];";
@@ -160,7 +170,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=3:bordercolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y={$y}";
         }
     }
-    $filter .= "[vtext];";
+    $filter .= "[vtext];"; // TERMINA CADENA DE VIDEO
     $lastStream = "[vtext]";
 
     // 6. LOGO
@@ -173,17 +183,15 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 7. AUDIO (Copia simple si falla el mix, para probar)
-    // Intentamos mix primero
+    // 7. AUDIO (CORREGIDO: Agregado el punto y coma ';' al inicio para separar cadenas)
     if ($audioPath) {
         $mIdx = $useLogo ? "2" : "1";
-        $filter .= "[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
+        $filter .= ";[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
-        $filter .= "[0:a]atempo=1.0[afinal]";
+        $filter .= ";[0:a]atempo=1.0[afinal]";
     }
 
-    // COMANDO DE EJECUCIÓN FANTASMA
-    // Usamos 'nohup' y desconectamos stdin/stdout/stderr para que PHP no espere ni se cuelgue
+    // EJECUCIÓN
     $cmd = "nohup " . escapeshellarg($ffmpegBin) . " -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 1 -crf 28 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " > " . escapeshellarg($logFile) . " 2>&1 & echo $!";
 
     $pid = shell_exec($cmd);
@@ -193,7 +201,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// ---> VERIFICAR ESTADO
+// ---> ESTADO
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
@@ -202,16 +210,16 @@ if ($action === 'status') {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
         
-        if (file_exists($fullPath) && filesize($fullPath) > 100000) { // >100KB
+        if (file_exists($fullPath) && filesize($fullPath) > 100000) {
             chmod($fullPath, 0777);
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
-            // Leer últimas líneas del log para ver si hay error de FFmpeg
-            $logTail = shell_exec("tail -n 5 " . escapeshellarg($logFile));
+            // Leer últimas líneas del log para debug
+            $logTail = shell_exec("tail -n 3 " . escapeshellarg($logFile));
             if (strpos($logTail, 'Error') !== false || strpos($logTail, 'Invalid') !== false) {
-                 echo json_encode(['status' => 'error', 'msg' => 'FFmpeg falló: ' . $logTail]);
+                 echo json_encode(['status' => 'error', 'msg' => 'Error: ' . substr($logTail, 0, 100)]);
             } elseif (time() - $data['start'] > 600) {
-                 echo json_encode(['status' => 'error', 'msg' => 'Tiempo agotado.']);
+                 echo json_encode(['status' => 'error', 'msg' => 'Timeout.']);
             } else {
                  echo json_encode(['status' => 'processing', 'debug' => $logTail]);
             }
@@ -226,7 +234,7 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral v43 - System Check</title>
+    <title>Viral v44 Corrected</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background: #000; color: #fff; padding: 20px; font-family: sans-serif; }
@@ -241,14 +249,14 @@ if ($action === 'status') {
         .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
         .bg-red { background: #dc3545; }
         .bg-green { background: #28a745; }
-        .log-box { font-family: monospace; font-size: 0.7rem; color: #00ff00; background: #000; padding: 10px; border-radius: 5px; margin-top: 10px; min-height: 40px; }
+        .log-box { font-family: monospace; font-size: 0.7rem; color: #00ff00; background: #000; padding: 10px; border-radius: 5px; margin-top: 10px; min-height: 40px; word-break: break-all; }
         .hidden { display: none; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>Sistema v43</h2>
+    <h2>Sistema v44</h2>
     
     <div class="step">
         <h5>1. Motor de Video</h5>
@@ -257,9 +265,9 @@ if ($action === 'status') {
             <span class="small"><?php echo $engineStatus == 'installed' ? 'INSTALADO' : 'NO INSTALADO'; ?></span>
         </div>
         <?php if($engineStatus != 'installed'): ?>
-            <button class="btn-dl" onclick="runAction('download_engine')">DESCARGAR MOTOR</button>
+            <button class="btn-dl" onclick="runAction('download_engine')">1. DESCARGAR MOTOR</button>
         <?php else: ?>
-            <button class="btn-test" onclick="runAction('test_engine')">TESTEAR MOTOR</button>
+            <button class="btn-test" onclick="runAction('test_engine')">2. TESTEAR MOTOR</button>
         <?php endif; ?>
         <div id="log1" class="log-box">Esperando acción...</div>
     </div>
@@ -275,12 +283,12 @@ if ($action === 'status') {
             <label class="form-check-label text-white small">Modo Espejo</label>
         </div>
 
-        <button class="btn-go" onclick="uploadVideo()">RENDERIZAR</button>
+        <button class="btn-go" onclick="uploadVideo()">3. RENDERIZAR</button>
     </div>
     
     <div id="processBox" class="step hidden text-center">
         <div class="spinner-border text-success mb-2"></div>
-        <p class="small text-muted">Procesando video...</p>
+        <p class="small text-muted">Renderizando...</p>
         <div id="procLog" class="log-box text-start">Iniciando...</div>
         <a id="dlLink" href="#" class="btn btn-primary mt-2 hidden">BAJAR VIDEO</a>
     </div>
