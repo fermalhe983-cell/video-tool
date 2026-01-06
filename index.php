@@ -1,17 +1,18 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v37.0 (EMERGENCY CORE)
-// Optimización Extrema: Algoritmos de bajo consumo + Límite de Buffer.
+// VIRAL REELS MAKER v39.0 (PORTABLE ENGINE + 16GB POWER)
+// Solución: Descarga un FFmpeg portátil que no se borra al reiniciar.
+// Calidad: Full HD (1080p) aprovechando tus 16GB de RAM.
 // ==========================================
 
-// Configuración de Supervivencia
-@ini_set('upload_max_filesize', '512M'); // Bajamos a 512MB para no saturar entrada
-@ini_set('post_max_size', '512M');
-@ini_set('max_execution_time', 600); 
-@ini_set('memory_limit', '256M'); // PHP ligero
+// Configuración "Bestia" (Aprovechando tu servidor)
+@ini_set('upload_max_filesize', '2048M');
+@ini_set('post_max_size', '2048M');
+@ini_set('max_execution_time', 1200); 
+@ini_set('memory_limit', '4096M'); // 4GB para PHP
 @ini_set('display_errors', 0);
 
-// Directorios
+// Rutas
 $baseDir = __DIR__;
 $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
@@ -19,21 +20,67 @@ $jobsDir = $baseDir . '/jobs';
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
 $audioPath = $baseDir . '/news.mp3';
-$logFile = $baseDir . '/ffmpeg_log.txt';
+$logFile = $baseDir . '/debug_log.txt';
 
-// Carpetas
-if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); chmod($uploadDir, 0777); }
-if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); chmod($processedDir, 0777); }
-if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777); }
+// Ruta del FFmpeg Portátil
+$ffmpegDir = $baseDir . '/bin';
+$ffmpegBin = $ffmpegDir . '/ffmpeg'; 
 
-// Limpieza (Archivos > 20 min se borran)
+// Crear carpetas
+if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
+if (!file_exists($processedDir)) mkdir($processedDir, 0777, true);
+if (!file_exists($jobsDir)) mkdir($jobsDir, 0777, true);
+if (!file_exists($ffmpegDir)) mkdir($ffmpegDir, 0777, true);
+
+// Limpieza
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     foreach (glob("$dir/*") as $file) {
-        if (is_file($file) && (time() - filemtime($file) > 1200)) @unlink($file);
+        if (is_file($file) && (time() - filemtime($file) > 3600)) @unlink($file);
     }
 }
 
 $action = $_GET['action'] ?? '';
+
+// ---> VERIFICAR SI TENEMOS MOTOR
+$hasFFmpeg = file_exists($ffmpegBin) && is_executable($ffmpegBin);
+
+// ---> ACCIÓN: INSTALAR FFMPEG (Auto-Download)
+if ($action === 'install_ffmpeg') {
+    header('Content-Type: application/json');
+    if ($hasFFmpeg) { echo json_encode(['status'=>'ok', 'msg'=>'Ya instalado']); exit; }
+    
+    // Descargar versión estática (John Van Sickle)
+    $url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+    $tarFile = $baseDir . '/ffmpeg.tar.xz';
+    
+    // 1. Descargar
+    file_put_contents($tarFile, fopen($url, 'r'));
+    if (!file_exists($tarFile) || filesize($tarFile) < 1000000) {
+        echo json_encode(['status'=>'error', 'msg'=>'Error descargando FFmpeg']); exit;
+    }
+    
+    // 2. Descomprimir
+    // Usamos shell_exec porque PHP nativo no siempre maneja .tar.xz
+    shell_exec("tar -xf " . escapeshellarg($tarFile) . " -C " . escapeshellarg($baseDir));
+    
+    // 3. Mover binario
+    // Busca la carpeta extraída (el nombre cambia con la versión)
+    $extractedDirs = glob($baseDir . '/ffmpeg-*-static');
+    if (!empty($extractedDirs)) {
+        $sourceBin = $extractedDirs[0] . '/ffmpeg';
+        rename($sourceBin, $ffmpegBin);
+        chmod($ffmpegBin, 0775); // Hacer ejecutable
+        
+        // Limpieza
+        shell_exec("rm -rf " . escapeshellarg($extractedDirs[0]));
+        unlink($tarFile);
+        
+        echo json_encode(['status'=>'success']);
+    } else {
+        echo json_encode(['status'=>'error', 'msg'=>'Error al descomprimir']);
+    }
+    exit;
+}
 
 // ---> LOGS
 if ($action === 'viewlog') {
@@ -49,105 +96,107 @@ if ($action === 'download' && isset($_GET['file'])) {
     if (file_exists($filePath)) {
         if (ob_get_level()) ob_end_clean();
         header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="VIRAL_LITE_'.date('Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_PRO_16GB.mp4"');
         header('Content-Length: ' . filesize($filePath));
         readfile($filePath);
         exit;
     }
 }
 
-// ---> SUBIDA
+// ---> SUBIDA Y PROCESAMIENTO
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
-        echo json_encode(['status' => 'error', 'message' => 'Error subida (Posible falta de RAM).']); exit;
+    if (!$hasFFmpeg) {
+        echo json_encode(['status' => 'error', 'message' => 'Motor FFmpeg no instalado. Pulsa el botón instalar.']); exit;
     }
 
-    $jobId = uniqid('v37_');
+    if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
+    }
+
+    $jobId = uniqid('v39_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
     $outputFile = "$processedDir/$outputFileName";
     $jobFile = "$jobsDir/$jobId.json";
 
-    if(!move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile)) {
-        echo json_encode(['status' => 'error', 'message' => 'Fallo al mover archivo.']); exit;
-    }
+    move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile);
     chmod($inputFile, 0777);
 
-    // Recursos
+    // --- CONFIGURACIÓN DE VIDEO (1080p FULL HD) ---
     $useLogo = file_exists($logoPath);
     $useFont = file_exists($fontPath);
-    $useAudio = file_exists($audioPath);
+    $audioPath = file_exists($audioPath) ? $audioPath : false;
     $useMirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
 
     // Texto
-    $rawTitle = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
-    $rawTitle = mb_strtoupper($rawTitle);
+    $rawTitle = mb_strtoupper($_POST['videoTitle'] ?? '');
     $wrappedText = wordwrap($rawTitle, 18, "\n", true);
     $lines = explode("\n", $wrappedText);
-    if (count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
+    if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes para 480p (480x854)
-    if ($count == 1) { $barH = 100; $fSize = 45; $yPos = [55]; }
-    elseif ($count == 2) { $barH = 160; $fSize = 40; $yPos = [45, 95]; }
-    else { $barH = 210; $fSize = 35; $yPos = [35, 80, 125]; }
+    // Tamaños para 1080p
+    if ($count == 1) { $barH = 240; $fSize = 110; $yPos = [140]; }
+    elseif ($count == 2) { $barH = 350; $fSize = 100; $yPos = [100, 215]; }
+    else { $barH = 450; $fSize = 80; $yPos = [90, 190, 290]; }
 
-    // --- COMANDO DE EMERGENCIA ---
     $inputs = "-i " . escapeshellarg($inputFile);
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
-    if ($useAudio) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
+    if ($audioPath) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
 
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
 
-    // 1. ESCALADO RÁPIDO (flags=neighbor ahorra 80% CPU/RAM)
-    // Forzamos 480 de ancho, alto proporcional, padding negro si falta.
-    $filter .= "[0:v]scale=480:854:force_original_aspect_ratio=decrease:flags=neighbor,pad=480:854:(ow-iw)/2:(oh-ih)/2:color=black{$mirrorCmd}[base];";
+    // 1. FONDO (Blur 1080p) - Ahora sí podemos usarlo porque tienes RAM de sobra
+    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10{$mirrorCmd}[bg];";
+
+    // 2. FRENTE (Video Centrado)
+    $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease{$mirrorCmd}[fg];";
+
+    // 3. OVERLAY
+    $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[base];";
     $lastStream = "[base]";
 
-    // 2. CAJA NEGRA
-    $filter .= "{$lastStream}drawbox=x=0:y=20:w=iw:h={$barH}:color=black@0.9:t=fill";
+    // 4. BARRA
+    $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h={$barH}:color=black@0.9:t=fill";
 
-    // 3. TEXTO
+    // 5. TEXTO
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
         foreach ($lines as $i => $line) {
             $y = $yPos[$i];
-            $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=2:bordercolor=black:shadowx=1:shadowy=1:x=(w-text_w)/2:y={$y}";
+            $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y={$y}";
         }
     }
     $filter .= "[vtext];";
     $lastStream = "[vtext]";
 
-    // 4. LOGO (Pequeño)
+    // 6. LOGO
     if ($useLogo) {
-        $logoY = 20 + ($barH/2) - 25; 
-        $filter .= "[1:v]scale=-1:50:flags=neighbor[logo_s];"; // Neighbor aquí también
-        $filter .= "{$lastStream}[logo_s]overlay=10:{$logoY}[vfinal_out];";
-        $lastStream = "[vfinal_out]";
+        $logoY = 60 + ($barH/2) - 70;
+        $filter .= "[1:v]scale=-1:140[logo_s];";
+        $filter .= "{$lastStream}[logo_s]overlay=40:{$logoY}[vfinal]";
+        $lastStream = "[vfinal]";
     } else {
-        $filter .= "{$lastStream}copy[vfinal_out];";
+        $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 5. AUDIO MIX SIMPLIFICADO
-    if ($useAudio) {
+    // 7. AUDIO
+    if ($audioPath) {
         $mIdx = $useLogo ? "2" : "1";
-        // Bajamos el volumen de música y mezclamos
-        $filter .= "[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[afinal_out]";
+        $filter .= "[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
-        $filter .= "[0:a]atempo=1.0[afinal_out]";
+        $filter .= "[0:a]atempo=1.0[afinal]";
     }
 
-    // EJECUCIÓN (LÍMITES DUROS)
-    // -threads 1: 1 solo núcleo.
-    // -t 60: Corta el video a 60 segundos MÁXIMO (Evita crash por duración).
-    // -max_muxing_queue_size 400: Reduce consumo de buffer.
-    $cmd = "ffmpeg -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal_out]\" -c:v libx264 -preset ultrafast -threads 1 -t 60 -crf 30 -pix_fmt yuv420p -c:a aac -b:a 64k -ac 1 -ar 44100 -max_muxing_queue_size 400 -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
+    // EJECUCIÓN USANDO EL BINARIO PORTÁTIL
+    // Usamos el path absoluto $ffmpegBin
+    $cmd = "nice -n 10 " . escapeshellarg($ffmpegBin) . " -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -crf 26 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
-    file_put_contents($logFile, "\n--- JOB $jobId (LOW SPEC) ---\nCMD: $cmd\n", FILE_APPEND);
+    file_put_contents($logFile, "\n--- JOB $jobId (16GB POWER) ---\nCMD: $cmd\n", FILE_APPEND);
     exec($cmd);
 
     file_put_contents($jobFile, json_encode(['status' => 'processing', 'file' => $outputFileName, 'start' => time()]));
@@ -159,18 +208,14 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
-    
     if (file_exists($jFile)) {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
-        
-        // Si existe y pesa > 1KB
-        if (file_exists($fullPath) && filesize($fullPath) > 1024) {
+        if (file_exists($fullPath) && filesize($fullPath) > 50000) {
             chmod($fullPath, 0777); 
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
-            // Timeout rápido (5 mins)
-            if (time() - $data['start'] > 300) echo json_encode(['status' => 'error', 'message' => 'Crash: Video muy pesado para este VPS.']);
+            if (time() - $data['start'] > 900) echo json_encode(['status' => 'error', 'message' => 'Timeout']);
             else echo json_encode(['status' => 'processing']);
         }
     } else { echo json_encode(['status' => 'error']); }
@@ -182,95 +227,124 @@ if ($action === 'status') {
 <html lang="es" data-bs-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Viral Lite v37</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viral PRO 16GB</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
-        body { background-color: #000; font-family: 'Inter', sans-serif; color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 15px; }
-        .main-card { background: #111; width: 100%; max-width: 480px; border: 1px solid #333; border-radius: 15px; padding: 25px; }
-        .header-title { font-family: 'Anton', sans-serif; color: #ff3d00; font-size: 2rem; text-transform: uppercase; text-align: center; margin: 0; }
-        .sub-title { text-align: center; color: #666; font-size: 0.8rem; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px; }
-        
-        .viral-input { background: #000; border: 2px solid #333; color: white; font-family: 'Anton'; font-size: 1.2rem; padding: 12px; width: 100%; border-radius: 8px; margin-bottom: 15px; }
-        .upload-btn { border: 2px dashed #444; border-radius: 10px; padding: 20px; text-align: center; cursor: pointer; background: #0a0a0a; margin-bottom: 20px; }
-        .btn-action { background: #ff3d00; color: #fff; border: none; width: 100%; padding: 15px; font-family: 'Anton'; font-size: 1.2rem; text-transform: uppercase; border-radius: 8px; cursor: pointer; }
+        body { background-color: #000; font-family: 'Inter', sans-serif; color: white; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+        .main-card { background: #111; width: 100%; max-width: 500px; border: 1px solid #333; border-radius: 20px; padding: 30px; box-shadow: 0 0 50px rgba(0,255,200,0.1); }
+        .header-title { font-family: 'Anton', sans-serif; color: #00ffc8; font-size: 2.2rem; text-align: center; margin: 0; }
+        .viral-input { background: #000; border: 2px solid #333; color: white; font-family: 'Anton'; font-size: 1.4rem; padding: 15px; width: 100%; border-radius: 10px; margin-bottom: 20px; }
+        .btn-viral { background: #00ffc8; color: #000; border: none; width: 100%; padding: 18px; font-family: 'Anton'; font-size: 1.4rem; border-radius: 12px; cursor: pointer; transition: 0.2s; }
+        .btn-viral:hover { transform: scale(1.02); background: #fff; }
+        .btn-install { background: #ff3d00; color: white; font-weight: bold; width: 100%; padding: 15px; border-radius: 10px; border: none; margin-bottom: 20px; cursor: pointer; }
         
         .hidden { display: none; }
-        .video-box { width: 100%; aspect-ratio: 9/16; background: #000; margin-bottom: 15px; border-radius: 10px; overflow: hidden; border: 1px solid #333; }
+        .video-box { width: 100%; aspect-ratio: 9/16; background: #000; margin-bottom: 20px; border-radius: 15px; overflow: hidden; border: 1px solid #333; }
         video { width: 100%; height: 100%; object-fit: cover; }
-        
-        .progress-bar { height: 4px; background: #333; width: 100%; margin-top: 15px; border-radius: 2px; overflow: hidden; }
-        .progress-fill { height: 100%; background: #ff3d00; width: 0%; transition: width 0.3s; }
-        .form-check-input:checked { background-color: #ff3d00; border-color: #ff3d00; }
+        .progress-bar { height: 5px; background: #333; width: 100%; margin-top: 20px; border-radius: 3px; }
+        .progress-fill { height: 100%; background: #00ffc8; width: 0%; transition: width 0.3s; }
     </style>
 </head>
 <body>
 
 <div class="main-card">
-    <h1 class="header-title">VIRAL LITE v37</h1>
-    <p class="sub-title">Low Memory Core</p>
+    <h1 class="header-title">VIRAL PRO 16GB</h1>
+    <p class="text-center text-secondary small mb-4">High Performance Mode</p>
 
-    <div id="uiInput">
+    <?php if(!$hasFFmpeg): ?>
+    <div id="installScreen" class="text-center">
+        <div class="alert alert-warning small">⚠️ Motor de video no detectado</div>
+        <p class="small text-secondary">Tu servidor se reinició y borró el motor. Haz clic para reinstalarlo permanentemente en tu carpeta.</p>
+        <button id="btnInstall" class="btn-install" onclick="installEngine()">📥 INSTALAR MOTOR (1 MIN)</button>
+        <div id="installLog" class="small text-info mt-2"></div>
+    </div>
+    <?php else: ?>
+        <div class="alert alert-success small text-center py-1 mb-4">✅ Motor Activo | RAM Disponible: 16GB</div>
+    <?php endif; ?>
+
+    <div id="uiInput" class="<?php echo $hasFFmpeg ? '' : 'hidden'; ?>">
         <form id="vForm">
-            <label class="small text-secondary fw-bold mb-1">TÍTULO</label>
-            <input type="text" name="videoTitle" id="tIn" class="viral-input" placeholder="ESCRIBE AQUÍ..." maxlength="50" required autocomplete="off">
-
-            <div class="form-check form-switch mb-3 p-2 border border-secondary rounded bg-dark d-flex justify-content-between">
-                <label class="form-check-label text-white small" for="mirrorCheck">Espejo (Mirror)</label>
-                <input class="form-check-input" type="checkbox" id="mirrorCheck">
-            </div>
-
-            <div class="upload-btn" onclick="document.getElementById('fIn').click()">
-                <div class="fs-1">📂</div>
-                <div class="fw-bold mt-2" id="fName">Subir Video</div>
-                <div class="small text-muted">Max 1 Minuto (Recomendado)</div>
+            <input type="text" name="videoTitle" id="tIn" class="viral-input" placeholder="TÍTULO GANCHO..." required autocomplete="off">
+            
+            <div class="p-4 border border-secondary border-dashed rounded text-center mb-4" onclick="document.getElementById('fIn').click()" style="cursor:pointer; background:#050505;">
+                <div class="fs-1">⚡</div>
+                <div class="fw-bold mt-2" id="fName">Subir Video HD</div>
                 <input type="file" name="videoFile" id="fIn" accept="video/*" hidden required>
             </div>
 
-            <button type="submit" class="btn-action">RENDERIZAR</button>
+            <div class="form-check form-switch mb-3 d-flex justify-content-center gap-2">
+                <input class="form-check-input" type="checkbox" id="mirrorCheck">
+                <label class="form-check-label text-white small" for="mirrorCheck">Modo Espejo (Anti-Copyright)</label>
+            </div>
+
+            <button type="submit" class="btn-viral">🚀 RENDERIZAR</button>
         </form>
     </div>
 
-    <div id="uiProcess" class="hidden text-center py-4">
-        <div class="spinner-border text-danger mb-3"></div>
-        <h4 class="fw-bold">PROCESANDO...</h4>
-        <p class="text-muted small">Optimizando para servidor ligero.</p>
+    <div id="uiProcess" class="hidden text-center py-5">
+        <div class="spinner-border text-info mb-3"></div>
+        <h3 class="fw-bold">PROCESANDO...</h3>
         <div class="progress-bar"><div id="pFill" class="progress-fill"></div></div>
     </div>
 
     <div id="uiResult" class="hidden text-center">
-        <h4 class="text-success fw-bold mb-3">✅ ¡LISTO!</h4>
+        <h3 class="text-success fw-bold mb-3">✅ VIDEO LISTO</h3>
         <div class="video-box"><div id="vidWrap" style="width:100%; height:100%;"></div></div>
-        <a id="dlBtn" href="#" class="btn-action text-decoration-none d-block">⬇️ DESCARGAR</a>
-        <button onclick="location.reload()" class="btn btn-link text-muted mt-2 text-decoration-none">Nuevo</button>
+        <a id="dlBtn" href="#" class="btn-viral text-decoration-none d-block">⬇️ DESCARGAR FULL HD</a>
+        <button onclick="location.reload()" class="btn btn-link text-muted mt-3">Nuevo</button>
     </div>
     
-    <a href="?action=viewlog" target="_blank" class="d-block text-center mt-3 text-secondary text-decoration-none small" style="opacity:0.5;">Debug Logs</a>
+    <a href="?action=viewlog" target="_blank" class="d-block text-center mt-4 text-secondary small text-decoration-none" style="opacity:0.3;">Logs</a>
 </div>
 
 <script>
-// Logic
+// AUTO-INSTALLER LOGIC
+async function installEngine() {
+    const btn = document.getElementById('btnInstall');
+    const log = document.getElementById('installLog');
+    btn.disabled = true;
+    btn.innerText = "⏳ DESCARGANDO... (NO CIERRES)";
+    log.innerText = "Conectando con repositorio...";
+    
+    try {
+        const res = await fetch('?action=install_ffmpeg');
+        const data = await res.json();
+        if(data.status === 'success' || data.status === 'ok') {
+            log.innerText = "¡Instalado! Recargando...";
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            btn.disabled = false;
+            btn.innerText = "REINTENTAR";
+            alert("Error: " + data.msg);
+        }
+    } catch(e) {
+        btn.disabled = false;
+        alert("Error de conexión");
+    }
+}
+
+// EDITOR LOGIC
 const tIn = document.getElementById('tIn');
 const fIn = document.getElementById('fIn');
-tIn.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
-fIn.addEventListener('change', function() { if(this.files[0]) document.getElementById('fName').innerText = '✅ ' + this.files[0].name; });
+if(tIn) tIn.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
+if(fIn) fIn.addEventListener('change', function() { if(this.files[0]) document.getElementById('fName').innerText = '✅ ' + this.files[0].name; });
 
-document.getElementById('vForm').addEventListener('submit', function(e) {
+document.getElementById('vForm')?.addEventListener('submit', function(e) {
     e.preventDefault();
-    if(!fIn.files.length) return alert("Sube video");
+    if(!fIn.files.length) return alert("Sube un video");
 
     document.getElementById('uiInput').classList.add('hidden');
     document.getElementById('uiProcess').classList.remove('hidden');
 
     const fd = new FormData(this);
     fd.append('mirrorMode', document.getElementById('mirrorCheck').checked);
-    
     const xhr = new XMLHttpRequest();
     
     xhr.upload.addEventListener("progress", (evt) => {
         if (evt.lengthComputable) {
-            const p = Math.round((evt.loaded / evt.total) * 50);
+            const p = Math.round((evt.loaded / evt.total) * 40);
             document.getElementById('pFill').style.width = p + '%';
         }
     });
@@ -281,21 +355,21 @@ document.getElementById('vForm').addEventListener('submit', function(e) {
                 const res = JSON.parse(xhr.responseText);
                 if(res.status === 'success') track(res.jobId);
                 else { alert(res.message); location.reload(); }
-            } catch { alert("Error respuesta"); location.reload(); }
+            } catch { alert("Error respuesta servidor"); location.reload(); }
         } else { alert("Error conexión"); location.reload(); }
     };
     xhr.send(fd);
 });
 
 function track(id) {
-    let p = 50;
+    let p = 40;
     const fill = document.getElementById('pFill');
-    const fake = setInterval(() => { if(p < 95) { p+=0.5; fill.style.width = p+'%'; } }, 1000);
+    const fake = setInterval(() => { if(p < 95) { p+=0.3; fill.style.width = p+'%'; } }, 1000);
 
     let attempts = 0;
     const check = setInterval(async () => {
         attempts++;
-        if(attempts > 120) { clearInterval(check); clearInterval(fake); alert("Timeout (Memoria llena)"); location.reload(); }
+        if(attempts > 600) { clearInterval(check); clearInterval(fake); alert("Timeout"); location.reload(); }
         try {
             const res = await (await fetch(`?action=status&jobId=${id}`)).json();
             if(res.status === 'finished') {
@@ -307,7 +381,7 @@ function track(id) {
                 alert(res.message); location.reload();
             }
         } catch {}
-    }, 3000);
+    }, 2000);
 }
 
 function show(file) {
