@@ -1,14 +1,14 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v33.0 (ATOMIC STABILITY - 720p)
-// Estrategia: Reducción a HD (720x1280) para ahorrar 50% de RAM y evitar reinicios.
+// VIRAL REELS MAKER v34.0 (SURVIVAL MODE - qHD 540p)
+// Estrategia: Resolución qHD (540x960) para consumo mínimo de RAM.
 // ==========================================
 
-// Configuración
+// Configuración de Supervivencia
 @ini_set('upload_max_filesize', '1024M');
 @ini_set('post_max_size', '1024M');
 @ini_set('max_execution_time', 1800); 
-@ini_set('memory_limit', '512M'); // Dejamos RAM libre para el sistema
+@ini_set('memory_limit', '128M'); // Bajamos PHP para dejarle toda la RAM a FFmpeg
 @ini_set('display_errors', 0);
 
 // Directorios
@@ -49,7 +49,7 @@ if ($action === 'download' && isset($_GET['file'])) {
     if (file_exists($filePath)) {
         if (ob_get_level()) ob_end_clean();
         header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="VIRAL_720p_'.date('Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_qHD_'.date('Hi').'.mp4"');
         header('Content-Length: ' . filesize($filePath));
         readfile($filePath);
         exit;
@@ -64,7 +64,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['status' => 'error', 'message' => 'Error subida PHP.']); exit;
     }
 
-    $jobId = uniqid('v33_');
+    $jobId = uniqid('v34_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -85,17 +85,17 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     // Texto
     $rawTitle = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
     $rawTitle = mb_strtoupper($rawTitle);
-    $wrappedText = wordwrap($rawTitle, 18, "\n", true); // Un poco más ancho en 720p relativo
+    $wrappedText = wordwrap($rawTitle, 18, "\n", true);
     $lines = explode("\n", $wrappedText);
     if (count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes para 720p (Todo es más pequeño porque la resolución bajó)
-    if ($count == 1) { $barH = 160; $fSize = 75; $yPos = [90]; }
-    elseif ($count == 2) { $barH = 240; $fSize = 65; $yPos = [70, 145]; }
-    else { $barH = 300; $fSize = 55; $yPos = [60, 130, 200]; }
+    // Ajustes para qHD (540x960) - Todo a la mitad de tamaño
+    if ($count == 1) { $barH = 120; $fSize = 55; $yPos = [70]; }
+    elseif ($count == 2) { $barH = 180; $fSize = 48; $yPos = [55, 115]; }
+    else { $barH = 220; $fSize = 40; $yPos = [45, 100, 155]; }
 
-    // --- COMANDO 720p (ULTRA ESTABLE) ---
+    // --- COMANDO qHD (ULTRA LIGHT) ---
     $inputs = "-i " . escapeshellarg($inputFile);
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
     if ($useAudio) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
@@ -103,32 +103,29 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
 
-    // 1. ESCALADO A 720x1280 (La clave del ahorro de RAM)
-    // Scale: Forzamos ancho 720, alto proporcional.
-    // Pad: Rellenamos hasta 1280 si falta.
-    $filter .= "[0:v]scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1{$mirrorCmd}[base];";
+    // 1. ESCALADO A 540x960 (La resolución más ligera aceptable)
+    $filter .= "[0:v]scale=540:960:force_original_aspect_ratio=decrease,pad=540:960:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1{$mirrorCmd}[base];";
     $lastStream = "[base]";
 
-    // 2. BARRA NEGRA (Posición ajustada a 720p)
-    // y=40 (antes 60)
-    $filter .= "{$lastStream}drawbox=x=0:y=40:w=iw:h={$barH}:color=black@0.9:t=fill";
+    // 2. BARRA NEGRA (Posición ajustada a 540p)
+    $filter .= "{$lastStream}drawbox=x=0:y=30:w=iw:h={$barH}:color=black@0.9:t=fill";
     
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        $xPos = $useLogo ? "(w-text_w)/2+50" : "(w-text_w)/2"; // Ajustado
+        $xPos = $useLogo ? "(w-text_w)/2+40" : "(w-text_w)/2"; 
         foreach ($lines as $i => $line) {
             $y = $yPos[$i];
-            $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=3:bordercolor=black:shadowx=2:shadowy=2:x={$xPos}:y={$y}";
+            $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=2:bordercolor=black:shadowx=1:shadowy=1:x={$xPos}:y={$y}";
         }
     }
     $filter .= "[v_text];"; 
     $lastStream = "[v_text]";
 
-    // 3. LOGO (Re-escalado a 720p)
+    // 3. LOGO (Re-escalado a 540p)
     if ($useLogo) {
-        $logoY = 40 + ($barH/2) - 45; // Centrado en barra
-        $filter .= "[1:v]scale=-1:90[logo_s];"; // Logo más pequeño
-        $filter .= "{$lastStream}[logo_s]overlay=25:{$logoY}[v_final_out];";
+        $logoY = 30 + ($barH/2) - 35; // Centrado
+        $filter .= "[1:v]scale=-1:70[logo_s];"; // Logo pequeño
+        $filter .= "{$lastStream}[logo_s]overlay=15:{$logoY}[v_final_out];";
         $lastStream = "[v_final_out]";
     } else {
         $filter .= "{$lastStream}copy[v_final_out];";
@@ -142,8 +139,9 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "[0:a]atempo=1.0[a_final_out]";
     }
 
-    // EJECUCIÓN (THREADS=1 + 720p)
-    $cmd = "nice -n 15 ffmpeg -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[a_final_out]\" -c:v libx264 -preset ultrafast -threads 1 -crf 28 -r 30 -c:a aac -ar 44100 -ac 2 -b:a 96k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
+    // EJECUCIÓN (THREADS=1 + 540p)
+    // Usamos el preset 'veryfast' en lugar de 'ultrafast' para compensar la baja resolución con un poco mejor compresión
+    $cmd = "nice -n 15 ffmpeg -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[a_final_out]\" -c:v libx264 -preset veryfast -threads 1 -crf 28 -r 30 -c:a aac -ar 44100 -ac 2 -b:a 96k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
     exec($cmd);
@@ -179,34 +177,34 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Viral Stable v33</title>
+    <title>Viral Survival v34</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
         body { background-color: #050505; font-family: 'Inter', sans-serif; color: white; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 15px; }
         .main-card { background: #111; width: 100%; max-width: 550px; border: 1px solid #333; border-radius: 20px; padding: 25px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
-        .header-title { font-family: 'Anton', sans-serif; text-align: center; color: #ffeb3b; font-size: 2.5rem; text-transform: uppercase; margin: 0; line-height: 1; }
+        .header-title { font-family: 'Anton', sans-serif; text-align: center; color: #ff5722; font-size: 2.5rem; text-transform: uppercase; margin: 0; line-height: 1; }
         .header-sub { text-align: center; color: #666; font-size: 0.8rem; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 25px; }
         
         .viral-input { background: #000; border: 2px solid #333; color: white; font-family: 'Anton'; font-size: 1.4rem; text-transform: uppercase; padding: 15px; width: 100%; border-radius: 10px; resize: none; }
-        .viral-input:focus { outline: none; border-color: #ffeb3b; }
+        .viral-input:focus { outline: none; border-color: #ff5722; }
         
         .upload-area { border: 2px dashed #444; border-radius: 12px; padding: 25px; text-align: center; margin-top: 20px; cursor: pointer; transition: 0.2s; background: #0a0a0a; }
-        .btn-viral { background: #ffeb3b; color: #000; border: none; width: 100%; padding: 18px; font-family: 'Anton'; font-size: 1.5rem; text-transform: uppercase; border-radius: 12px; margin-top: 25px; cursor: pointer; }
+        .btn-viral { background: #ff5722; color: white; border: none; width: 100%; padding: 18px; font-family: 'Anton'; font-size: 1.5rem; text-transform: uppercase; border-radius: 12px; margin-top: 25px; cursor: pointer; }
         .video-box { background: #000; border: 2px solid #333; border-radius: 15px; overflow: hidden; width: 100%; aspect-ratio: 9/16; margin-bottom: 20px; position: relative; }
         video { width: 100%; height: 100%; object-fit: cover; }
         .hidden { display: none !important; }
         .progress { height: 5px; background: #333; margin-top: 20px; border-radius: 5px; }
-        .progress-bar { background: #ffeb3b; width: 0%; transition: width 0.3s; }
+        .progress-bar { background: #ff5722; width: 0%; transition: width 0.3s; }
         
-        .form-check-input:checked { background-color: #ffeb3b; border-color: #ffeb3b; }
+        .form-check-input:checked { background-color: #ff5722; border-color: #ff5722; }
     </style>
 </head>
 <body>
 
 <div class="main-card">
-    <h1 class="header-title">STABLE MODE v33</h1>
-    <p class="header-sub">Optimized for Low RAM (720p)</p>
+    <h1 class="header-title">SURVIVAL v34</h1>
+    <p class="header-sub">qHD (540p) Low Memory Mode</p>
 
     <?php if(!file_exists($fontPath)) echo '<div class="alert alert-danger p-1 text-center small mb-2">⚠️ Falta font.ttf</div>'; ?>
     <?php if(!file_exists($audioPath)) echo '<div class="alert alert-warning p-1 text-center small mb-2">⚠️ Falta news.mp3</div>'; ?>
@@ -214,7 +212,7 @@ if ($action === 'status') {
     <div id="uiInput">
         <form id="vForm">
             <div class="mb-3">
-                <label class="fw-bold text-warning small mb-1 d-block">1. TÍTULO NOTICIA</label>
+                <label class="fw-bold text-danger small mb-1 d-block">1. TÍTULO NOTICIA</label>
                 <textarea name="videoTitle" id="tIn" class="viral-input" rows="2" placeholder="TÍTULO AQUÍ..." required></textarea>
             </div>
 
@@ -234,7 +232,7 @@ if ($action === 'status') {
     </div>
 
     <div id="uiProcess" class="hidden text-center py-5">
-        <div class="spinner-border text-warning mb-3" style="width: 3rem; height: 3rem;"></div>
+        <div class="spinner-border text-danger mb-3" style="width: 3rem; height: 3rem;"></div>
         <h3 class="fw-bold animate-pulse">PROCESANDO...</h3>
         <p class="text-muted small" id="statusText">Subiendo...</p>
         <div class="progress"><div id="pBar" class="progress-bar"></div></div>
@@ -287,7 +285,7 @@ document.getElementById('vForm').addEventListener('submit', function(e) {
             try {
                 const res = JSON.parse(xhr.responseText);
                 if(res.status === 'success') {
-                    document.getElementById('statusText').innerText = "Renderizando (Modo Estable)...";
+                    document.getElementById('statusText').innerText = "Renderizando (Survival Mode)...";
                     track(res.jobId);
                 } else { alert(res.message); location.reload(); }
             } catch(e) { alert("Error respuesta"); location.reload(); }
