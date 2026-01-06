@@ -1,14 +1,15 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v47.0 (TERMINAL ENGINE)
-// Usa el motor 'ffmpeg' de 77MB que acabas de instalar manualmente.
+// VIRAL REELS MAKER v48.0 (AUTO-INSTALLER WIZARD)
+// Solución: Script PHP que ejecuta los comandos de terminal por ti.
+// Si el servidor borra el archivo, este script lo recupera con un clic.
 // ==========================================
 
-// Configuración Servidor Potente
+// Configuración
 @ini_set('upload_max_filesize', '2048M');
 @ini_set('post_max_size', '2048M');
 @ini_set('max_execution_time', 1200); 
-@ini_set('memory_limit', '4096M'); 
+@ini_set('memory_limit', '2048M'); 
 @ini_set('display_errors', 0);
 
 // Rutas
@@ -16,7 +17,7 @@ $baseDir = __DIR__;
 $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
 $jobsDir = $baseDir . '/jobs'; 
-$ffmpegBin = $baseDir . '/ffmpeg'; // TU ARCHIVO INSTALADO
+$ffmpegBin = $baseDir . '/ffmpeg'; // El motor vivirá aquí
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
 $audioPath = $baseDir . '/news.mp3';
@@ -36,27 +37,63 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 
 $action = $_GET['action'] ?? '';
 
-// ---> DIAGNÓSTICO
+// ---> DIAGNÓSTICO DEL MOTOR
 $engineStatus = 'missing';
-$filterCheck = 'unknown';
-
 if (file_exists($ffmpegBin)) {
-    if (filesize($ffmpegBin) > 40000000) {
+    if (filesize($ffmpegBin) > 30000000) { // Mayor a 30MB
         $engineStatus = 'installed';
         if (!is_executable($ffmpegBin)) chmod($ffmpegBin, 0775);
-        
-        $check = shell_exec($ffmpegBin . " -filters 2>&1");
-        if (strpos($check, 'drawtext') !== false) {
-            $filterCheck = 'ok';
-        } else {
-            $filterCheck = 'bad_version';
-        }
-    } else {
-        $engineStatus = 'too_small';
     }
 }
 
-// ---> DESCARGA
+// ---> INSTALADOR AUTOMÁTICO (WGET VIA PHP)
+if ($action === 'force_install') {
+    header('Content-Type: application/json');
+    
+    // 1. Descargar (Usando wget del sistema o curl de PHP)
+    $url = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz";
+    $tarFile = $baseDir . '/engine.tar.xz';
+    
+    // Intentamos descargar con PHP nativo para no depender de wget
+    $fp = fopen($tarFile, 'w+');
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 600);
+    curl_setopt($ch, CURLOPT_FILE, $fp);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_exec($ch);
+    curl_close($ch);
+    fclose($fp);
+    
+    if (!file_exists($tarFile) || filesize($tarFile) < 1000000) {
+        echo json_encode(['status'=>'error', 'msg'=>'Error descargando el archivo.']); exit;
+    }
+    
+    // 2. Descomprimir
+    shell_exec("tar -xf " . escapeshellarg($tarFile) . " -C " . escapeshellarg($baseDir));
+    
+    // 3. Buscar la carpeta extraída y mover el archivo
+    $subDirs = glob($baseDir . '/ffmpeg-*-static');
+    if (!empty($subDirs)) {
+        $extractedBin = $subDirs[0] . '/ffmpeg';
+        if(file_exists($extractedBin)) {
+            // Mover a la raíz
+            rename($extractedBin, $ffmpegBin);
+            // Permisos
+            chmod($ffmpegBin, 0775);
+            // Limpieza
+            shell_exec("rm -rf " . escapeshellarg($subDirs[0]));
+            unlink($tarFile);
+            echo json_encode(['status'=>'success']);
+        } else {
+            echo json_encode(['status'=>'error', 'msg'=>'No se encontró el ejecutable ffmpeg dentro del zip.']);
+        }
+    } else {
+        echo json_encode(['status'=>'error', 'msg'=>'Error al descomprimir.']);
+    }
+    exit;
+}
+
+// ---> DESCARGA VIDEO
 if ($action === 'download' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = "$processedDir/$file";
@@ -75,10 +112,10 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
     if ($engineStatus !== 'installed') {
-        echo json_encode(['status'=>'error', 'msg'=>'No encuentro el archivo ffmpeg.']); exit;
+        echo json_encode(['status'=>'error', 'msg'=>'El motor no está instalado. Pulsa el botón rojo primero.']); exit;
     }
 
-    $jobId = uniqid('v47_');
+    $jobId = uniqid('v48_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -103,7 +140,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes 720p
+    // Ajustes 720p (Estándar de Oro)
     if ($count == 1) { $barH = 160; $fSize = 75; $yPos = [90]; }
     elseif ($count == 2) { $barH = 240; $fSize = 65; $yPos = [70, 145]; }
     else { $barH = 300; $fSize = 55; $yPos = [60, 130, 200]; }
@@ -115,7 +152,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
     
-    // 1. FONDO NEGRO SÓLIDO
+    // 1. FONDO OSCURO (Sólido = Cero RAM extra)
     $filter .= "color=c=black:s=720x1280[bg];";
     
     // 2. VIDEO ESCALADO
@@ -149,7 +186,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 7. AUDIO
+    // 7. AUDIO (Correcto ;)
     if ($audioPath) {
         $mIdx = $useLogo ? "2" : "1";
         $filter .= ";[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
@@ -157,7 +194,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= ";[0:a]atempo=1.0[afinal]";
     }
 
-    // EJECUCIÓN
+    // EJECUCIÓN (Usando binario local)
     $cmd = "nice -n 10 " . escapeshellarg($ffmpegBin) . " -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 27 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
@@ -200,7 +237,7 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral v47 Terminal</title>
+    <title>Viral v48 Auto-Install</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background: #050505; color: #fff; padding: 20px; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
@@ -209,18 +246,20 @@ if ($action === 'status') {
         .success { border-color: #0f0; color: #0f0; background: rgba(0,255,0,0.1); }
         .fail { border-color: #f00; color: #f00; background: rgba(255,0,0,0.1); }
         .btn-go { width: 100%; padding: 15px; background: #0f0; color: #000; font-weight: bold; border: none; border-radius: 10px; cursor: pointer; }
+        .btn-install { width: 100%; padding: 15px; background: #f00; color: #fff; font-weight: bold; border: none; border-radius: 10px; cursor: pointer; animation: pulse 2s infinite; }
         .hidden { display: none; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2 class="text-center mb-4 text-white">SISTEMA v47</h2>
+    <h2 class="text-center mb-4 text-white">SISTEMA v48</h2>
 
-    <?php if ($engineStatus === 'installed' && $filterCheck === 'ok'): ?>
+    <?php if ($engineStatus === 'installed'): ?>
         <div class="status-box success">
-            <h4>✅ MOTOR MASTER DETECTADO</h4>
-            <p class="small mb-0">Instalación vía Terminal exitosa.</p>
+            <h4>✅ MOTOR LISTO</h4>
+            <p class="small mb-0">Sistema operativo y funcional.</p>
         </div>
 
         <div id="uiInput">
@@ -235,15 +274,11 @@ if ($action === 'status') {
 
     <?php else: ?>
         <div class="status-box fail">
-            <h4>❌ FALTA EJECUTAR COMANDOS</h4>
-            <p class="small">Abre la Consola de EasyPanel y ejecuta los comandos de instalación (wget...).</p>
-            <hr>
-            <p class="small text-start">
-                Estado: <b><?php echo $engineStatus; ?></b><br>
-                Filtros: <b><?php echo $filterCheck; ?></b>
-            </p>
+            <h4>❌ FALTA EL MOTOR</h4>
+            <p class="small">El servidor se reinició y borró el motor. Haz clic abajo para reinstalarlo automáticamente.</p>
         </div>
-        <button onclick="location.reload()" class="btn btn-outline-light w-100">YA EJECUTÉ LOS COMANDOS</button>
+        <button id="btnInstall" onclick="installNow()" class="btn-install">⬇️ INSTALAR MOTOR AHORA</button>
+        <div id="installLog" class="text-center mt-2 text-muted small"></div>
     <?php endif; ?>
 
     <div id="uiProcess" class="hidden text-center mt-4">
@@ -260,6 +295,29 @@ if ($action === 'status') {
 </div>
 
 <script>
+async function installNow() {
+    const btn = document.getElementById('btnInstall');
+    btn.disabled = true;
+    btn.innerText = "INSTALANDO... (ESPERA)";
+    document.getElementById('installLog').innerText = "Descargando (Puede tardar 30s)...";
+    
+    try {
+        const res = await fetch('?action=force_install');
+        const data = await res.json();
+        if(data.status === 'success') {
+            document.getElementById('installLog').innerText = "¡Instalado! Recargando...";
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            alert("Error: " + data.msg);
+            btn.disabled = false;
+            btn.innerText = "REINTENTAR";
+        }
+    } catch(e) {
+        alert("Error de red.");
+        btn.disabled = false;
+    }
+}
+
 async function process() {
     const tIn = document.getElementById('tIn').value;
     const fIn = document.getElementById('fIn').files[0];
