@@ -1,6 +1,6 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v22.0 (FUSION: STREAMING + SMART TITLES)
+// VIRAL REELS MAKER v23.0 (BIG FONTS EDITION)
 // ==========================================
 ini_set('display_errors', 0);
 ini_set('max_execution_time', 0);
@@ -32,25 +32,22 @@ $action = $_GET['action'] ?? '';
 // ==========================================
 // 2. MOTOR DE VISTA PREVIA (STREAMING)
 // ==========================================
-// Este fue el código que te funcionó bien para ver el video.
 if ($action === 'stream' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = "$processedDir/$file";
     
     if (!file_exists($filePath)) {
         header("HTTP/1.0 404 Not Found");
-        die("Video no encontrado o procesando...");
+        die("Video no encontrado...");
     }
 
     $size = filesize($filePath);
     header('Content-Type: video/mp4');
     header('Accept-Ranges: bytes');
     header('Content-Length: ' . $size);
-    // Trucos para evitar caché y errores en Chrome
     header("Cache-Control: no-cache, must-revalidate"); 
     header("Expires: 0"); 
     
-    // Limpiar buffer
     if (ob_get_level()) ob_end_clean();
     readfile($filePath);
     exit;
@@ -62,7 +59,7 @@ if ($action === 'download' && isset($_GET['file'])) {
     $filePath = "$processedDir/$file";
     if (file_exists($filePath)) {
         header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="VIRAL_FINAL_' . date('His') . '.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_BIG_'.date('Hi').'.mp4"');
         header('Content-Length: ' . filesize($filePath));
         if (ob_get_level()) ob_end_clean();
         readfile($filePath);
@@ -77,7 +74,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
     }
 
-    $jobId = uniqid('v22_');
+    $jobId = uniqid('v23_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -91,32 +88,34 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $useFont = file_exists($fontPath);
     $useAudio = file_exists($audioPath);
 
-    // --- LÓGICA DE TEXTO MEJORADA (MANUAL) ---
+    // --- LÓGICA DE TEXTO (AUMENTADA) ---
     $rawTitle = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
-    $rawTitle = mb_strtoupper($rawTitle); // Mayúsculas
+    $rawTitle = mb_strtoupper($rawTitle);
     
-    // 1. Envolver texto (18 caracteres por línea es el estándar de oro)
-    $wrappedText = wordwrap($rawTitle, 18, "\n", true);
+    // Wrap a 16 caracteres
+    $wrappedText = wordwrap($rawTitle, 16, "\n", true);
     $lines = explode("\n", $wrappedText);
     
-    // 2. Limitar a 3 líneas máx
+    // Máximo 3 líneas
     if (count($lines) > 3) {
         $lines = array_slice($lines, 0, 3);
         $lines[2] .= "..";
     }
     $count = count($lines);
 
-    // 3. Configuración Geométrica (Matemática Pura)
-    // Definimos altura de barra y posiciones Y exactas para cada caso
+    // === CONFIGURACIÓN DE TAMAÑOS (BIG FONTS) ===
     if ($count == 1) {
-        $barH = 220; $fSize = 95; 
-        $yPos = [140]; // Una línea centrada
+        // 1 Línea: GIGANTE
+        $barH = 240; $fSize = 115; 
+        $yPos = [135]; 
     } elseif ($count == 2) {
-        $barH = 300; $fSize = 85; 
-        $yPos = [110, 210]; // Dos líneas distribuidas
+        // 2 Líneas: MUY GRANDE
+        $barH = 330; $fSize = 100; 
+        $yPos = [100, 210]; 
     } else {
-        $barH = 380; $fSize = 70; 
-        $yPos = [100, 190, 280]; // Tres líneas apretadas
+        // 3 Líneas: GRANDE (Ajustado para caber)
+        $barH = 420; $fSize = 80; 
+        $yPos = [90, 190, 290]; 
     }
 
     // --- COMANDO FFMPEG ---
@@ -126,57 +125,50 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $filter = "";
     
-    // 1. BASE + CALIDAD (Optimizada para peso)
-    // noise=alls=2: Ruido al 2% (Suficiente para Meta, ligero para descarga)
-    // crf 28: Compresión inteligente
+    // 1. BASE + CALIDAD
     $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:10[bg];";
     $filter .= "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,eq=contrast=1.1:saturation=1.2,noise=alls=2:allf=t+u[fg];";
     $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];";
     $lastStream = "[base]";
 
-    // 2. BARRA NEGRA (Variable según texto)
+    // 2. BARRA NEGRA (Más alta para soportar letra grande)
     $filter .= "{$lastStream}drawbox=x=0:y=60:w=iw:h={$barH}:color=black@0.9:t=fill[bar];";
     $lastStream = "[bar]";
 
     // 3. LOGO
     if ($useLogo) {
         $filter .= "[1:v]scale=-1:130[logo_s];";
-        $logoY = 60 + ($barH/2) - 65; // Centrado exacto en la barra
+        $logoY = 60 + ($barH/2) - 65; 
         $filter .= "{$lastStream}[logo_s]overlay=40:{$logoY}[wlogo];";
         $lastStream = "[wlogo]";
     }
 
-    // 4. TEXTO (Loop Manual)
+    // 4. TEXTO
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        $xPos = $useLogo ? "(w-text_w)/2+70" : "(w-text_w)/2"; // Si hay logo, mueve el texto a la derecha
+        $xPos = $useLogo ? "(w-text_w)/2+70" : "(w-text_w)/2";
         
         foreach ($lines as $i => $line) {
             $y = $yPos[$i];
             $streamOut = ($i == $count - 1) ? "titled" : "txt{$i}";
             $streamIn = ($i == 0) ? $lastStream : "[txt".($i-1)."]";
             
-            // Texto Amarillo + Borde Negro
             $draw = "drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=5:bordercolor=black:x={$xPos}:y={$y}";
             $filter .= "{$streamIn}{$draw}[{$streamOut}];";
         }
         $lastStream = "[titled]";
     }
 
-    // 5. AUDIO & OUTPUT
+    // 5. AUDIO
     $filter .= "{$lastStream}setpts=0.94*PTS[vfinal];";
-    
     if ($useAudio) {
         $mIdx = $useLogo ? "2" : "1";
-        // Música al 10% (Muy suave fondo)
         $filter .= "[{$mIdx}:a]volume=0.1[bgmusic];[0:a]volume=1.0[voice];[voice][bgmusic]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
         $filter .= "[0:a]atempo=1.0638[afinal]";
     }
 
-    // EJECUCIÓN OPTIMIZADA
-    // -preset veryfast: Rápido pero comprime mejor que ultrafast.
-    // -crf 28: Menor peso, calidad buena para celular.
+    // EJECUCIÓN
     $cmd = "ffmpeg -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset veryfast -crf 28 -r 30 -pix_fmt yuv420p -c:a aac -ar 44100 -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " > /dev/null 2>&1 &";
 
     exec($cmd);
@@ -192,7 +184,6 @@ if ($action === 'status') {
     $jFile = "$jobsDir/$id.json";
     if (file_exists($jFile)) {
         $data = json_decode(file_get_contents($jFile), true);
-        // Verificar si existe y tiene peso mínimo
         if (file_exists("$processedDir/" . $data['file']) && filesize("$processedDir/" . $data['file']) > 10000) {
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
@@ -208,7 +199,7 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Fusion v22</title>
+    <title>Viral Reels v23</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
@@ -235,16 +226,16 @@ if ($action === 'status') {
 <body>
 
 <div class="main-card">
-    <h1 class="header-title">FUSION v22</h1>
-    <p class="header-sub">Texto Inteligente + Streaming</p>
+    <h1 class="header-title">BIG FONTS v23</h1>
+    <p class="header-sub">Texto Grande + Vista Previa OK</p>
 
     <?php if(!file_exists($audioPath)) echo '<div class="alert alert-warning p-1 text-center small">⚠️ Falta news.mp3</div>'; ?>
 
     <div id="uiInput">
         <form id="vForm">
             <div>
-                <label class="form-label">Título (Detecta líneas auto)</label>
-                <textarea name="videoTitle" id="tIn" class="viral-input" rows="2" placeholder="ESCRIBE TU TÍTULO AQUÍ..." required></textarea>
+                <label class="form-label">Título (Se ajusta solo)</label>
+                <textarea name="videoTitle" id="tIn" class="viral-input" rows="2" placeholder="TITULO GIGANTE..." required></textarea>
             </div>
 
             <div class="upload-area" onclick="document.getElementById('fIn').click()">
@@ -260,7 +251,7 @@ if ($action === 'status') {
     <div id="uiProcess" class="hidden text-center py-5">
         <div class="spinner-grow text-warning mb-3"></div>
         <h3 class="fw-bold">Renderizando...</h3>
-        <p class="text-muted small">Creando viral ligero y optimizado.</p>
+        <p class="text-muted small">Aplicando letras gigantes y mezcla.</p>
     </div>
 
     <div id="uiResult" class="hidden text-center">
@@ -313,9 +304,9 @@ function show(filename) {
     document.getElementById('uiProcess').classList.add('hidden');
     document.getElementById('uiResult').classList.remove('hidden');
     
-    // 1. URL STREAMING (Para vista previa instantánea)
+    // Vista Previa (Streaming)
     const streamUrl = `?action=stream&file=${filename}&t=${Date.now()}`;
-    // 2. URL DESCARGA
+    // Descarga (Forzada)
     const dlUrl = `?action=download&file=${filename}`;
     
     document.getElementById('dlBtn').href = dlUrl;
