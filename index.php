@@ -1,17 +1,17 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v35.0 (DIRECT STREAM - ZERO CRASH)
-// Lógica antigua (Lineal) con Diseño Nuevo.
+// VIRAL REELS MAKER v35.0 (ARQUITECTURA LINEAL - CERO FALLOS)
+// Regresamos a la lógica básica que sí funcionaba en tu servidor.
 // ==========================================
 
-// Configuración básica
+// Configuración para VPS Pequeños
 @ini_set('upload_max_filesize', '2048M');
 @ini_set('post_max_size', '2048M');
 @ini_set('max_execution_time', 3600);
-@ini_set('memory_limit', '512M');
+@ini_set('memory_limit', '512M'); // Límite bajo para PHP, dejamos la RAM a FFmpeg
 @ini_set('display_errors', 0);
 
-// Rutas
+// Directorios
 $baseDir = __DIR__;
 $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
@@ -25,7 +25,7 @@ if (!file_exists($uploadDir)) { mkdir($uploadDir, 0777, true); chmod($uploadDir,
 if (!file_exists($processedDir)) { mkdir($processedDir, 0777, true); chmod($processedDir, 0777); }
 if (!file_exists($jobsDir)) { mkdir($jobsDir, 0777, true); chmod($jobsDir, 0777); }
 
-// Limpieza
+// Limpieza automática
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     foreach (glob("$dir/*") as $file) {
         if (is_file($file) && (time() - filemtime($file) > 1800)) @unlink($file);
@@ -41,7 +41,7 @@ if ($action === 'viewlog') {
     exit;
 }
 
-// ---> DESCARGA
+// ---> DESCARGAR
 if ($action === 'download' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = "$processedDir/$file";
@@ -60,7 +60,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
     if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
-        echo json_encode(['status' => 'error', 'message' => 'Error subida.']); exit;
+        echo json_encode(['status' => 'error', 'message' => 'Error al subir.']); exit;
     }
 
     $jobId = uniqid('v35_');
@@ -73,54 +73,55 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile);
     chmod($inputFile, 0777);
 
-    // Config
+    // Recursos
     $useLogo = file_exists($logoPath);
     $useFont = file_exists($fontPath);
     
-    // Texto
+    // Texto Viral (Auto-Wrap)
     $rawTitle = preg_replace('/[^a-zA-Z0-9 áéíóúÁÉÍÓÚñÑ!?]/u', '', $_POST['videoTitle'] ?? '');
     $rawTitle = mb_strtoupper($rawTitle);
-    $wrappedText = wordwrap($rawTitle, 18, "\n", true);
+    $wrappedText = wordwrap($rawTitle, 20, "\n", true); // 20 caracteres por línea
     $lines = explode("\n", $wrappedText);
     if (count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes
-    if ($count == 1) { $barH = 180; $fSize = 85; $yPos = [100]; }
-    elseif ($count == 2) { $barH = 280; $fSize = 75; $yPos = [80, 170]; }
-    else { $barH = 380; $fSize = 65; $yPos = [70, 150, 230]; }
+    // Ajustes de diseño según líneas de texto
+    if ($count == 1) { $barH = 180; $fSize = 80; $yPos = [100]; }
+    elseif ($count == 2) { $barH = 280; $fSize = 70; $yPos = [80, 170]; }
+    else { $barH = 380; $fSize = 60; $yPos = [70, 150, 230]; }
 
-    // --- COMANDO LINEAL (EL DE ANTES) ---
-    // Sin overlay complex, sin stream loops raros. Solo filtros directos.
+    // --- COMANDO LINEAL (EL DE BAJO CONSUMO) ---
+    // No usamos 'complex_filter' con múltiples cadenas. Usamos una sola cadena.
     
     $inputs = "-i " . escapeshellarg($inputFile);
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
 
     $filter = "";
 
-    // 1. ESCALADO SEGURO
-    // Reducimos a ancho 720p para asegurar rendimiento.
-    // scale=720:-2 mantiene la proporción y asegura que el alto sea par (evita errores).
+    // 1. ESCALADO DE SEGURIDAD
+    // Redimensionamos a ancho 720p. Esto baja la carga de RAM drásticamente.
+    // scale=720:-2 (Ancho 720, Alto proporcional par).
     $filter .= "[0:v]scale=720:-2[vscaled];";
     $lastStream = "[vscaled]";
 
-    // 2. DIBUJAR CAJA Y TEXTO (Directo sobre el video escalado)
+    // 2. DIBUJAR CAJA NEGRA (Directo sobre el video)
     $filter .= "{$lastStream}drawbox=x=0:y=40:w=iw:h={$barH}:color=black@0.9:t=fill";
 
+    // 3. DIBUJAR TEXTO
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        // Posición X: (w-text_w)/2 es el centro matemático
         foreach ($lines as $i => $line) {
             $y = $yPos[$i];
+            // Centrado matemático: x=(w-text_w)/2
             $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y={$y}";
         }
     }
     $filter .= "[vtext];";
     $lastStream = "[vtext]";
 
-    // 3. LOGO (Simple Overlay al final)
+    // 4. PONER LOGO (Overlay simple al final)
     if ($useLogo) {
-        $logoY = 40 + ($barH/2) - 50;
+        $logoY = 40 + ($barH/2) - 50; // Centrado en la barra
         $filter .= "[1:v]scale=-1:100[logo_s];";
         $filter .= "{$lastStream}[logo_s]overlay=20:{$logoY}[vfinal]";
         $lastStream = "[vfinal]";
@@ -128,9 +129,10 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // EJECUCIÓN LINEAL
-    // -threads 1: Vital para VPS pequeños
-    // -preset ultrafast: Vital para velocidad
+    // EJECUCIÓN OPTIMIZADA
+    // -threads 1: OBLIGATORIO para que tu VPS no explote.
+    // -preset ultrafast: OBLIGATORIO para velocidad.
+    // -pix_fmt yuv420p: OBLIGATORIO para que se vea en el navegador.
     $cmd = "nice -n 15 ffmpeg -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map 0:a? -c:v libx264 -preset ultrafast -threads 1 -crf 28 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
@@ -141,7 +143,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// ---> STATUS
+// ---> ESTADO
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
@@ -150,10 +152,12 @@ if ($action === 'status') {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
         
+        // Verificamos si el archivo pesa más de 10KB (Señale de que está escribiendo)
         if (file_exists($fullPath) && filesize($fullPath) > 10240) {
             chmod($fullPath, 0777); 
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
+            // Timeout preventivo
             if (time() - $data['start'] > 600) echo json_encode(['status' => 'error', 'message' => 'Timeout']);
             else echo json_encode(['status' => 'processing']);
         }
@@ -175,7 +179,6 @@ if ($action === 'status') {
         .main-card { background: #111; width: 100%; max-width: 550px; border: 1px solid #333; border-radius: 20px; padding: 25px; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
         .header-title { font-family: 'Anton', sans-serif; text-align: center; color: #44ff00; font-size: 2.5rem; text-transform: uppercase; margin: 0; line-height: 1; }
         .viral-input { background: #000; border: 2px solid #333; color: white; font-family: 'Anton'; font-size: 1.4rem; text-transform: uppercase; padding: 15px; width: 100%; border-radius: 10px; resize: none; }
-        .upload-area { border: 2px dashed #444; border-radius: 12px; padding: 25px; text-align: center; margin-top: 20px; cursor: pointer; transition: 0.2s; background: #0a0a0a; }
         .btn-viral { background: #44ff00; color: #000; border: none; width: 100%; padding: 18px; font-family: 'Anton'; font-size: 1.5rem; text-transform: uppercase; border-radius: 12px; margin-top: 25px; cursor: pointer; }
         .video-box { background: #000; border: 2px solid #333; border-radius: 15px; overflow: hidden; width: 100%; aspect-ratio: 9/16; margin-bottom: 20px; position: relative; }
         video { width: 100%; height: 100%; object-fit: cover; }
@@ -188,7 +191,7 @@ if ($action === 'status') {
 
 <div class="main-card">
     <h1 class="header-title">VIRAL WORKS v35</h1>
-    <p class="text-center text-secondary small mb-4">Old Core / New Design</p>
+    <p class="text-center text-secondary small mb-4">Lógica Lineal (Cero Fallos)</p>
 
     <?php if(!file_exists($fontPath)) echo '<div class="alert alert-danger p-1 text-center small mb-2">⚠️ Falta font.ttf</div>'; ?>
 
@@ -199,9 +202,9 @@ if ($action === 'status') {
                 <textarea name="videoTitle" id="tIn" class="viral-input" rows="2" placeholder="TÍTULO AQUÍ..." required></textarea>
             </div>
 
-            <div class="upload-area" onclick="document.getElementById('fIn').click()">
+            <div class="p-4 border border-secondary border-dashed rounded text-center mb-3" onclick="document.getElementById('fIn').click()" style="cursor:pointer; background:#0a0a0a;">
                 <div class="fs-1">📥</div>
-                <div class="fw-bold mt-2" id="fileName">Subir Video</div>
+                <div class="fw-bold mt-2" id="fileName">Toca para subir Video</div>
                 <input type="file" name="videoFile" id="fIn" accept="video/*" hidden required>
             </div>
 
@@ -261,7 +264,7 @@ document.getElementById('vForm').addEventListener('submit', function(e) {
             try {
                 const res = JSON.parse(xhr.responseText);
                 if(res.status === 'success') {
-                    document.getElementById('statusText').innerText = "Renderizando (Simple)...";
+                    document.getElementById('statusText').innerText = "Procesando...";
                     track(res.jobId);
                 } else { alert(res.message); location.reload(); }
             } catch(e) { alert("Error respuesta"); location.reload(); }
