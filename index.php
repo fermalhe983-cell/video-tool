@@ -1,16 +1,15 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v52.0 (SYSTEM INTEGRATION)
-// Solución: Usa el FFmpeg instalado en el sistema (/usr/bin/ffmpeg).
-// No busca archivos locales. Compatible con la instalación apt-get.
+// VIRAL REELS MAKER v53.0 (RENDER SAFE)
+// Solución: Corrige "Pantalla Negra" forzando formato de pixel yuv420p.
+// Usa el motor del sistema que ya lograste configurar.
 // ==========================================
 
 // Configuración
+@ini_set('display_errors', 0);
 @ini_set('upload_max_filesize', '2048M');
 @ini_set('post_max_size', '2048M');
-@ini_set('max_execution_time', 1200); 
-@ini_set('memory_limit', '2048M'); 
-@ini_set('display_errors', 0);
+@ini_set('max_execution_time', 1200);
 
 // Rutas
 $baseDir = __DIR__;
@@ -37,22 +36,19 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 $action = $_GET['action'] ?? '';
 
 // ==========================================
-// 1. DETECCIÓN DEL SISTEMA (NO LOCAL)
+// 1. DETECCIÓN DEL SISTEMA
 // ==========================================
-// Buscamos dónde está ffmpeg en el sistema Linux
 $systemPath = trim(shell_exec('which ffmpeg'));
-$version = '';
-$hasDrawtext = false;
+$status = [
+    'installed' => !empty($systemPath),
+    'drawtext' => false,
+    'path' => $systemPath
+];
 
-if (!empty($systemPath)) {
-    // Verificamos versión
-    $versionOutput = shell_exec("$systemPath -version | head -n 1");
-    $version = $versionOutput;
-    
-    // Verificamos filtros
+if ($status['installed']) {
     $filters = shell_exec("$systemPath -filters 2>&1");
     if (strpos($filters, 'drawtext') !== false) {
-        $hasDrawtext = true;
+        $status['drawtext'] = true;
     }
 }
 
@@ -78,15 +74,9 @@ if ($action === 'download' && isset($_GET['file'])) {
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    // Validaciones
-    if (empty($systemPath)) {
-        echo json_encode(['status'=>'error', 'msg'=>'FFmpeg no encontrado en el sistema. Revisa la configuración del "Comando" en EasyPanel.']); exit;
-    }
-    if (!$hasDrawtext) {
-        echo json_encode(['status'=>'error', 'msg'=>'El FFmpeg del sistema no soporta texto.']); exit;
-    }
+    if (!$status['installed']) { echo json_encode(['status'=>'error', 'msg'=>'FFmpeg no instalado en el sistema.']); exit; }
 
-    $jobId = uniqid('v52_');
+    $jobId = uniqid('v53_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -111,7 +101,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // Ajustes 720p (Estable)
+    // Ajustes 720p
     if ($count == 1) { $barH = 160; $fSize = 75; $yPos = [90]; }
     elseif ($count == 2) { $barH = 240; $fSize = 65; $yPos = [70, 145]; }
     else { $barH = 300; $fSize = 55; $yPos = [60, 130, 200]; }
@@ -123,14 +113,15 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
     
-    // A. FONDO SÓLIDO (Gris Oscuro #111)
-    $filter .= "color=c=#111111:s=720x1280[bg];";
+    // A. FONDO NEGRO
+    $filter .= "color=c=black:s=720x1280[bg];";
     
-    // B. VIDEO ESCALADO
-    $filter .= "[0:v]scale=720:1280:force_original_aspect_ratio=decrease{$mirrorCmd}[fg];";
+    // B. VIDEO (CORRECCIÓN DE PANTALLA NEGRA)
+    // Agregamos 'setsar=1' y 'format=yuv420p' para asegurar compatibilidad total
+    $filter .= "[0:v]scale=720:1280:force_original_aspect_ratio=decrease,setsar=1,format=yuv420p{$mirrorCmd}[fg];";
     
-    // C. MEZCLA
-    $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto[base];";
+    // C. MEZCLA (shortest=1 evita bucles infinitos de fondo negro)
+    $filter .= "[bg][fg]overlay=(W-w)/2:(H-h)/2:format=auto:shortest=1[base];";
     $lastStream = "[base]";
 
     // D. BARRA NEGRA
@@ -165,7 +156,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= ";[0:a]atempo=1.0[afinal]";
     }
 
-    // EJECUCIÓN (Usando $systemPath detectado automáticamente)
+    // EJECUCIÓN (Sistema)
     $cmd = "nice -n 10 " . escapeshellarg($systemPath) . " -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 27 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
@@ -185,11 +176,10 @@ if ($action === 'status') {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
         
-        if (file_exists($fullPath) && filesize($fullPath) > 100000) {
+        if (file_exists($fullPath) && filesize($fullPath) > 50000) {
             chmod($fullPath, 0777); 
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
         } else {
-            // Chequeo de logs
             $logTail = shell_exec("tail -n 3 " . escapeshellarg($logFile));
             if (strpos($logTail, 'Error') !== false || strpos($logTail, 'Invalid') !== false) {
                  echo json_encode(['status' => 'error', 'msg' => 'FFmpeg Error: ' . substr($logTail, 0, 100)]);
@@ -209,7 +199,7 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral v52 System</title>
+    <title>Viral v53 Render</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
@@ -228,20 +218,20 @@ if ($action === 'status') {
 <body>
 
 <div class="card">
-    <h2 class="text-center mb-4 text-primary fw-bold">SISTEMA v52</h2>
+    <h2 class="text-center mb-4 text-primary fw-bold">SISTEMA v53</h2>
 
     <table class="status-table">
         <tr>
             <td>Ubicación FFmpeg</td>
-            <td class="text-end text-light small"><?php echo !empty($systemPath) ? $systemPath : 'NO ENCONTRADO'; ?></td>
+            <td class="text-end text-light small"><?php echo !empty($status['path']) ? $status['path'] : 'NO ENCONTRADO'; ?></td>
         </tr>
         <tr>
             <td>Soporte Texto</td>
-            <td class="<?php echo $hasDrawtext?'ok':'fail'; ?>"><?php echo $hasDrawtext?'SÍ':'NO'; ?></td>
+            <td class="<?php echo $status['drawtext']?'ok':'fail'; ?>"><?php echo $status['drawtext']?'SÍ':'NO'; ?></td>
         </tr>
     </table>
 
-    <?php if ($hasDrawtext): ?>
+    <?php if ($status['drawtext']): ?>
         <div id="uiInput">
             <input type="text" id="tIn" class="form-control bg-dark text-white border-secondary mb-3" placeholder="TÍTULO GANCHO..." autocomplete="off">
             <input type="file" id="fIn" class="form-control bg-dark text-white border-secondary mb-3" accept="video/*">
@@ -255,18 +245,15 @@ if ($action === 'status') {
         </div>
     <?php else: ?>
         <div class="alert alert-danger text-center p-3 border border-danger rounded bg-transparent">
-            ❌ <strong>FALTA CONFIGURAR EASYPANEL</strong><br>
-            <span class="small">Ve a la pestaña <b>"Avanzado"</b> en EasyPanel y pon esto en el campo <b>"Comando"</b>:</span>
-            <div class="bg-black p-2 rounded mt-2 text-warning small font-monospace user-select-all">
-                /bin/bash -c "apt-get update && apt-get install -y ffmpeg && docker-php-entrypoint apache2-foreground"
-            </div>
-            <span class="small mt-2 d-block">Luego dale a <b>Guardar</b> e <b>Implementar</b>.</span>
+            ❌ <strong>CONFIGURACIÓN INCORRECTA</strong><br>
+            <span class="small">Vuelve al paso anterior y configura el "Comando" en la pestaña Avanzado de EasyPanel.</span>
         </div>
     <?php endif; ?>
 
     <div id="uiProcess" class="hidden text-center mt-4">
         <div class="spinner-border text-primary mb-3"></div>
-        <h5 class="fw-bold">PROCESANDO...</h5>
+        <h5 class="fw-bold">RENDERIZANDO...</h5>
+        <p class="text-muted small">Aplicando corrección de color...</p>
     </div>
 
     <div id="uiResult" class="hidden text-center mt-4">
