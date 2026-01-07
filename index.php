@@ -1,9 +1,10 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v62.0 (PRO NEWS & SPEED)
-// 1. Profesionalismo: Modo Espejo desactivado por defecto (para leer textos).
-// 2. Velocidad: Eliminado filtro de ruido pesado. Renderizado ultrarrápido.
-// 3. Evasión Pro: Usa Micro-Aceleración (1.02x) + Color Grading para cambiar Hash.
+// VIRAL REELS MAKER v63.0 (GOLD MASTER)
+// Versión Definitiva de Producción.
+// - Motor: Rápido (v62).
+// - Diseño: Viral News (v62).
+// - Gestión: Botón "Borrar y Nuevo" para ahorrar espacio en disco.
 // ==========================================
 
 // Configuración
@@ -27,7 +28,7 @@ if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
 if (!file_exists($processedDir)) mkdir($processedDir, 0777, true);
 if (!file_exists($jobsDir)) mkdir($jobsDir, 0777, true);
 
-// Limpieza
+// Limpieza Automática (Archivos viejos de más de 1 hora)
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     foreach (glob("$dir/*") as $file) {
         if (is_file($file) && (time() - filemtime($file) > 3600)) @unlink($file);
@@ -55,6 +56,7 @@ if ($status['ffmpeg']) {
 // 2. BACKEND
 // ==========================================
 
+// ---> DESCARGA
 if ($action === 'download' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = "$processedDir/$file";
@@ -68,12 +70,28 @@ if ($action === 'download' && isset($_GET['file'])) {
     }
 }
 
+// ---> BORRADO MANUAL (NUEVO EN v63)
+if ($action === 'delete_job' && isset($_GET['file'])) {
+    $file = basename($_GET['file']);
+    // Borrar el video final
+    if (file_exists("$processedDir/$file")) @unlink("$processedDir/$file");
+    
+    // Intentar borrar los archivos temporales asociados (por ID)
+    $jobId = explode('_', $file)[0]; // "v63_xxxx"
+    foreach (glob("$uploadDir/{$jobId}_*") as $f) @unlink($f); // Borrar video subido
+    foreach (glob("$jobsDir/{$jobId}*") as $f) @unlink($f); // Borrar json
+    
+    header('Location: ?msg=deleted');
+    exit;
+}
+
+// ---> UPLOAD & PROCESS
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
     if (!$status['ffmpeg']) { echo json_encode(['status'=>'error', 'msg'=>'Error: FFmpeg no encontrado.']); exit; }
 
-    $jobId = uniqid('v62_');
+    $jobId = uniqid('v63_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -89,7 +107,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $useAudio = file_exists($audioPath);
     $useMirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     
-    // TEXTO
+    // TEXTO (18 chars wrap, max 2 lines)
     $rawTitle = mb_strtoupper($_POST['videoTitle'] ?? '');
     $wrappedText = wordwrap($rawTitle, 18, "\n", true); 
     $lines = explode("\n", $wrappedText);
@@ -100,7 +118,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     $count = count($lines);
 
-    // GEOMETRÍA
+    // LAYOUT
     $canvasW = 720;
     $canvasH = 1280;
     
@@ -116,23 +134,18 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $mirrorCmd = $useMirror ? ",hflip" : "";
     
-    // --- CADENA DE FILTROS OPTIMIZADA (VELOCIDAD + CALIDAD) ---
+    // FILTROS
     $filter = "";
     
-    // 1. LIENZO OSCURO
+    // 1. LIENZO
     $filter .= "color=c=#080808:s={$canvasW}x{$canvasH}[bg];";
     
-    // 2. PROCESAMIENTO DE VIDEO (HASH KILLER SIN VOLTEAR)
-    // - scale: Ajuste de tamaño.
-    // - eq: Saturation 1.15 (Colores vivos = Viral), Contraste 1.05 (Mejor definición).
-    // - setpts: 0.98*PTS (Acelera el video un 2%. Imperceptible al ojo, cambia Hash totalmente).
+    // 2. VIDEO (SPEED + COLOR)
     $filter .= "[0:v]scale={$canvasW}:-1,setsar=1{$mirrorCmd},eq=saturation=1.15:contrast=1.05,setpts=0.98*PTS[vid];";
-    
-    // 3. POSICIONAMIENTO
     $filter .= "[bg][vid]overlay=0:{$videoY}:shortest=1[base];";
     $lastStream = "[base]";
 
-    // 4. TEXTO
+    // 3. TEXTO
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
         foreach ($lines as $i => $line) {
@@ -142,7 +155,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // 5. LOGO
+    // 4. LOGO
     if ($useLogo) {
         $filter .= "[1:v]scale=-1:80[logo_s];";
         $logoPosY = $canvasH - 120;
@@ -152,10 +165,9 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 6. AUDIO MIX (Acelerado igual que el video para sincronizar)
+    // 5. AUDIO
     if ($useAudio) {
         $mIdx = $useLogo ? "2" : "1";
-        // atempo=1.0204 compensa el setpts=0.98 (aprox) para mantener sync
         $filter .= ";[0:a]atempo=1.02,volume=1.0[voice];";
         $filter .= "[{$mIdx}:a]volume=0.15[bgm];";
         $filter .= "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
@@ -163,7 +175,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= ";[0:a]atempo=1.02[afinal]";
     }
 
-    // EJECUCIÓN (PRESET ULTRAFAST ESTRICTO)
+    // EJECUCIÓN
     $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 28 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     exec($cmd);
@@ -197,12 +209,13 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Noticiero v62 Pro</title>
+    <title>Viral Maker Gold</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <style>
         body { background: #000; color: #fff; padding: 15px; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        .card { background: #111; border: 1px solid #333; max-width: 480px; width: 100%; padding: 25px; border-radius: 25px; box-shadow: 0 0 50px rgba(0, 150, 255, 0.1); }
+        .card { background: #111; border: 1px solid #333; max-width: 480px; width: 100%; padding: 25px; border-radius: 25px; box-shadow: 0 0 50px rgba(255, 215, 0, 0.1); }
         h2 { font-family: 'Anton', sans-serif; letter-spacing: 1px; color: #fff; }
         
         .form-control { background: #000 !important; color: #FFD700 !important; border: 2px solid #333; font-weight: bold; text-align: center; border-radius: 12px; }
@@ -213,6 +226,9 @@ if ($action === 'status') {
         
         .btn-go { width: 100%; padding: 18px; background: linear-gradient(135deg, #FFD700, #FFA500); color: #000; font-family: 'Anton'; font-size: 1.4rem; border: none; border-radius: 12px; cursor: pointer; transition: 0.2s; }
         .btn-go:hover { transform: scale(1.02); background: #fff; }
+
+        .btn-clean { background: #333; color: #aaa; border: 1px solid #444; width: 100%; padding: 12px; border-radius: 12px; font-weight: bold; transition: 0.2s; }
+        .btn-clean:hover { background: #f00; color: #fff; border-color: #f00; }
         
         .hidden { display: none; }
         #videoContainer { width: 100%; aspect-ratio: 9/16; background: #000; margin-top: 20px; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
@@ -223,14 +239,14 @@ if ($action === 'status') {
 
 <div class="card">
     <div class="text-center mb-4">
-        <h2>NOTICIERO PRO v62</h2>
-        <p class="text-muted small m-0">EDICIÓN PROFESIONAL + VELOCIDAD</p>
+        <h2>VIRAL MAKER <span class="text-warning">v63</span></h2>
+        <p class="text-muted small m-0">PRODUCCIÓN FINAL</p>
     </div>
 
     <?php if ($status['ffmpeg']): ?>
         <div id="uiInput">
             <div class="mb-3">
-                <input type="text" id="tIn" class="form-control py-3" placeholder="TITULAR CORTO" maxlength="36" autocomplete="off">
+                <input type="text" id="tIn" class="form-control py-3" placeholder="TITULAR IMPACTANTE" maxlength="36" autocomplete="off">
                 <div id="charCount" class="char-counter">0 / 36</div>
             </div>
             
@@ -239,30 +255,41 @@ if ($action === 'status') {
             <div class="d-flex justify-content-center gap-3 mb-4">
                 <div class="form-check form-switch">
                     <input class="form-check-input" type="checkbox" id="mirrorCheck">
-                    <label class="text-secondary small fw-bold">Modo Espejo (No recomendado para texto)</label>
+                    <label class="text-secondary small fw-bold">Modo Espejo</label>
                 </div>
             </div>
             
-            <button class="btn-go" onclick="process()">⚡ RENDERIZAR RÁPIDO ⚡</button>
+            <button class="btn-go" onclick="process()">⚡ CREAR VIDEO ⚡</button>
         </div>
     <?php else: ?>
         <div class="alert alert-danger text-center fw-bold">⚠️ FFMPEG NO DETECTADO</div>
     <?php endif; ?>
 
     <div id="uiProcess" class="hidden text-center py-4">
-        <div class="spinner-border text-primary mb-4" style="width: 4rem; height: 4rem;"></div>
-        <h3 class="text-white" style="font-family: 'Anton'">PROCESANDO...</h3>
-        <p class="text-success small">Aceleración y Corrección de Color aplicadas...</p>
+        <div class="spinner-border text-warning mb-4" style="width: 4rem; height: 4rem;"></div>
+        <h3 class="text-white" style="font-family: 'Anton'">RENDERIZANDO...</h3>
+        <p class="text-success small">Aplicando Evasión Pro + Titular...</p>
     </div>
 
     <div id="uiResult" class="hidden text-center mt-3">
         <div id="videoContainer"></div>
         <a id="dlLink" href="#" class="btn btn-warning w-100 mt-3 fw-bold py-3" style="font-family: 'Anton'; font-size: 1.2rem;">⬇️ DESCARGAR VIDEO</a>
-        <button onclick="location.reload()" class="btn btn-outline-secondary w-100 mt-3">Crear Nuevo</button>
+        
+        <div class="row mt-3 g-2">
+            <div class="col-6">
+                 <button onclick="cleanAndNew()" class="btn-clean">🗑️ Borrar y Nuevo</button>
+            </div>
+            <div class="col-6">
+                 <button onclick="location.reload()" class="btn-clean">🔄 Solo Nuevo</button>
+            </div>
+        </div>
+        <p class="text-muted small mt-2">"Borrar y Nuevo" libera espacio en el servidor.</p>
     </div>
 </div>
 
 <script>
+let currentFile = '';
+
 const tIn = document.getElementById('tIn');
 const counter = document.getElementById('charCount');
 
@@ -300,6 +327,7 @@ function track(id) {
             const data = await res.json();
             if(data.status === 'finished') {
                 clearInterval(i);
+                currentFile = data.file;
                 document.getElementById('uiProcess').classList.add('hidden');
                 document.getElementById('uiResult').classList.remove('hidden');
                 document.getElementById('dlLink').href = '?action=download&file=' + data.file;
@@ -311,6 +339,14 @@ function track(id) {
             }
         } catch {}
     }, 2000);
+}
+
+function cleanAndNew() {
+    if(currentFile) {
+        window.location.href = '?action=delete_job&file=' + currentFile;
+    } else {
+        location.reload();
+    }
 }
 </script>
 </body>
