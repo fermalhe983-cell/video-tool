@@ -1,11 +1,10 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v58.0 (VIRAL ARCHITECTURE)
-// Diseño optimizado para retención de audiencia (Facebook Psychology).
-// - Título: Arriba, Ajustado, Amarillo Noticia.
-// - Video: Ancho completo (Full Width), subido para aprovechar espacio.
-// - Logo: Esquina Inferior Izquierda (Marca de agua no intrusiva).
-// - Motor: Sistema v7.0.2 Estable.
+// VIRAL REELS MAKER v59.0 (ULTRA COMPACT)
+// Optimización de espacio vertical:
+// - Título pegado al borde superior (Top safe area).
+// - Video subido inmediatamente debajo del título.
+// - Interfaz limita caracteres para forzar estilo "Punchy" (2 líneas máx).
 // ==========================================
 
 // Configuración
@@ -42,12 +41,8 @@ $action = $_GET['action'] ?? '';
 // 1. DETECCIÓN
 // ==========================================
 $ffmpegPath = trim(shell_exec('which ffmpeg'));
-$ffprobePath = trim(shell_exec('which ffprobe'));
-
 $status = [
     'ffmpeg' => !empty($ffmpegPath),
-    'ffprobe' => !empty($ffprobePath),
-    'drawtext' => false,
     'font' => file_exists($fontPath),
     'audio' => file_exists($audioPath)
 ];
@@ -67,7 +62,7 @@ if ($action === 'download' && isset($_GET['file'])) {
     if (file_exists($filePath)) {
         if (ob_get_level()) ob_end_clean();
         header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="VIRAL_NEWS_'.date('Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_MAX_'.date('Hi').'.mp4"');
         header('Content-Length: ' . filesize($filePath));
         readfile($filePath);
         exit;
@@ -79,16 +74,14 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if (!$status['ffmpeg']) { echo json_encode(['status'=>'error', 'msg'=>'Error: FFmpeg no encontrado.']); exit; }
 
-    $jobId = uniqid('v58_');
+    $jobId = uniqid('v59_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
     $outputFile = "$processedDir/$outputFileName";
     $jobFile = "$jobsDir/$jobId.json";
 
-    if (!move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile)) {
-        echo json_encode(['status'=>'error', 'msg'=>'Error al subir archivo.']); exit;
-    }
+    move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile);
     chmod($inputFile, 0777);
 
     // DATOS
@@ -97,24 +90,35 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $useAudio = file_exists($audioPath);
     $useMirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     
-    // TEXTO (Ajustado para ser más compacto)
+    // TEXTO (Limitado y Compacto)
     $rawTitle = mb_strtoupper($_POST['videoTitle'] ?? '');
-    $wrappedText = wordwrap($rawTitle, 20, "\n", true); // Más caracteres por línea
+    // Wrap a 22 caracteres para aprovechar el ancho completo
+    $wrappedText = wordwrap($rawTitle, 22, "\n", true); 
     $lines = explode("\n", $wrappedText);
-    if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
+    
+    // FORZAMOS MÁXIMO 2 LÍNEAS (Psicología Viral: Si es más largo, aburre)
+    if(count($lines) > 2) { 
+        $lines = array_slice($lines, 0, 2); 
+        $lines[1] .= ".."; // Indicador de corte
+    }
     $count = count($lines);
 
-    // --- GEOMETRÍA VIRAL ---
+    // --- GEOMETRÍA ULTRA COMPACTA ---
     $canvasW = 720;
     $canvasH = 1280;
     
-    // Zona del título (Cabecera)
-    // Reducimos un poco la altura reservada para subir el video
-    $headerHeight = ($count == 1) ? 180 : (($count == 2) ? 280 : 380);
-    
-    // Video Start Y (Donde empieza el video)
-    // Lo pegamos justo debajo del título para no desperdiciar espacio
-    $videoY = $headerHeight + 20; 
+    // Configuración Geométrica
+    if ($count == 1) {
+        // 1 Línea: Título gigante, video sube mucho
+        $fSize = 95;
+        $startYs = [25]; // Casi tocando el borde (margen mínimo de seguridad)
+        $videoY = 140;   // Video empieza inmediatamente después
+    } else {
+        // 2 Líneas
+        $fSize = 85;
+        $startYs = [25, 115]; // Línea 1 arriba, Línea 2 pegadita
+        $videoY = 230;        // Video empieza justo debajo
+    }
 
     $inputs = "-i " . escapeshellarg($inputFile);
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
@@ -123,39 +127,30 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
     
-    // 1. LIENZO PREMIUM (Gris muy oscuro, casi negro - Mejor contraste)
+    // 1. LIENZO DARK MODE (#101010)
     $filter .= "color=c=#101010:s={$canvasW}x{$canvasH}[bg];";
     
-    // 2. VIDEO (FULL WIDTH)
-    // scale=720:-1 fuerza que el ancho sea 720px (toda la pantalla)
-    // y la altura se ajuste automáticamente.
+    // 2. VIDEO FULL WIDTH (Estirado a los lados, posición dinámica)
     $filter .= "[0:v]scale={$canvasW}:-1,setsar=1{$mirrorCmd}[vid];";
-    
-    // Posicionamiento del video
+    // Overlay en Y variable según cuántas líneas de texto haya
     $filter .= "[bg][vid]overlay=0:{$videoY}:shortest=1[base];";
     $lastStream = "[base]";
 
-    // 3. TEXTO (TITULARES)
+    // 3. TEXTO (AMARILLO IMPACTO)
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        // Tamaño un poco más pequeño para elegancia, pero sigue siendo grande
-        $fSize = ($count == 1) ? 85 : (($count == 2) ? 75 : 65);
-        // Posiciones Y (Arriba del todo)
-        $startYs = ($count == 1) ? [80] : (($count == 2) ? [70, 160] : [60, 145, 230]);
-
         foreach ($lines as $i => $line) {
             $y = $startYs[$i];
-            // Amarillo Intenso (#FFD700) con Borde Negro Grueso (Impacto Visual)
-            $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y={$y}[v_text_{$i}];";
+            // Amarillo puro, Borde negro sólido (4px), Sombra dura
+            $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=3:shadowy=3:x=(w-text_w)/2:y={$y}[v_text_{$i}];";
             $lastStream = "[v_text_{$i}]";
         }
     }
 
-    // 4. LOGO (ABAJO IZQUIERDA - MARCA DE AGUA)
+    // 4. LOGO (ABAJO IZQUIERDA - Marca de agua)
     if ($useLogo) {
-        // Redimensionar logo a un tamaño discreto pero visible (80px alto)
         $filter .= "[1:v]scale=-1:80[logo_s];";
-        // Posición: x=30 (margen izq), y=H-120 (margen abajo)
+        // Margen inferior ajustado
         $logoPosY = $canvasH - 120;
         $filter .= "{$lastStream}[logo_s]overlay=30:{$logoPosY}[vfinal]";
         $lastStream = "[vfinal]";
@@ -163,19 +158,17 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 5. AUDIO HASH CHANGER (Mezcla noticias)
+    // 5. AUDIO MIX
     if ($useAudio) {
         $mIdx = $useLogo ? "2" : "1";
-        // Volumen noticias: 0.15 (Sutil, para no tapar voz original pero cambiar hash)
         $filter .= ";[{$mIdx}:a]volume=0.15[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
     } else {
         $filter .= ";[0:a]atempo=1.0[afinal]";
     }
 
-    // EJECUCIÓN ROBUSTA
+    // EJECUCIÓN
     $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 26 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
-    file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
     exec($cmd);
 
     file_put_contents($jobFile, json_encode(['status' => 'processing', 'file' => $outputFileName, 'start' => time()]));
@@ -207,81 +200,100 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral v58 Pro</title>
+    <title>Viral v59 Ultra</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
     <style>
-        body { background: #000; color: #fff; padding: 20px; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        .card { background: #111; border: 1px solid #333; max-width: 500px; width: 100%; padding: 25px; border-radius: 20px; box-shadow: 0 0 40px rgba(255, 200, 0, 0.15); }
+        body { background: #050505; color: #fff; padding: 15px; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .card { background: #151515; border: 1px solid #333; max-width: 480px; width: 100%; padding: 25px; border-radius: 25px; box-shadow: 0 0 50px rgba(255, 215, 0, 0.1); }
         
-        .status-badge { display: inline-block; padding: 5px 10px; border-radius: 5px; font-size: 0.75rem; font-weight: bold; margin-right: 5px; }
-        .bg-ok { background: rgba(0, 255, 0, 0.2); color: #0f0; border: 1px solid #0f0; }
-        .bg-fail { background: rgba(255, 0, 0, 0.2); color: #f00; border: 1px solid #f00; }
-
-        .btn-go { width: 100%; padding: 15px; background: linear-gradient(45deg, #FFD700, #FFA500); color: #000; font-family: 'Anton'; font-size: 1.3rem; border: none; border-radius: 10px; cursor: pointer; transition: transform 0.2s; box-shadow: 0 5px 15px rgba(255, 215, 0, 0.3); }
-        .btn-go:hover { transform: scale(1.03); }
+        h2 { font-family: 'Anton', sans-serif; letter-spacing: 2px; color: #FFD700; text-shadow: 0 0 10px rgba(255, 215, 0, 0.5); }
+        
+        .form-control { background: #000 !important; color: #FFD700 !important; border: 2px solid #333; font-weight: bold; text-align: center; border-radius: 12px; }
+        .form-control:focus { border-color: #FFD700; box-shadow: 0 0 15px rgba(255,215,0,0.2); }
+        
+        /* Input de Título Grande y Limitado */
+        #tIn { font-family: 'Anton', sans-serif; font-size: 1.5rem; text-transform: uppercase; height: auto; }
+        
+        .char-counter { font-size: 0.8rem; color: #666; text-align: right; margin-top: 5px; font-weight: bold; }
+        .char-counter.limit { color: #f00; }
+        
+        .btn-go { width: 100%; padding: 18px; background: #FFD700; color: #000; font-family: 'Anton'; font-size: 1.4rem; border: none; border-radius: 12px; cursor: pointer; transition: 0.2s; text-transform: uppercase; letter-spacing: 1px; }
+        .btn-go:hover { background: #fff; transform: scale(1.02); box-shadow: 0 0 20px rgba(255,215,0,0.4); }
         
         .hidden { display: none; }
-        #videoContainer { width: 100%; aspect-ratio: 9/16; background: #000; margin-top: 20px; border-radius: 10px; overflow: hidden; border: 1px solid #333; }
+        #videoContainer { width: 100%; aspect-ratio: 9/16; background: #000; margin-top: 20px; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
         video { width: 100%; height: 100%; object-fit: cover; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h2 class="text-warning fw-bold m-0" style="font-family: 'Anton'; letter-spacing: 2px;">NOTICIA v58</h2>
-        <div class="text-end">
-            <span class="status-badge <?php echo $status['ffmpeg']?'bg-ok':'bg-fail'; ?>">MOTOR</span>
-            <span class="status-badge <?php echo $status['audio']?'bg-ok':'bg-fail'; ?>">HASH</span>
-        </div>
+    <div class="text-center mb-4">
+        <h2>VIRAL MAKER v59</h2>
+        <p class="text-muted small m-0">DISEÑO ALTO IMPACTO (MAX 45 CARACTERES)</p>
     </div>
 
-    <?php if ($status['ffmpeg'] && $status['drawtext']): ?>
+    <?php if ($status['ffmpeg']): ?>
         <div id="uiInput">
-            <label class="small text-secondary mb-1 ms-1">TITULAR GANCHO (Ej: ¡INCREÍBLE LO QUE PASÓ!)</label>
-            <textarea id="tIn" class="form-control bg-dark text-warning mb-3 fw-bold text-center border-secondary" placeholder="ESCRIBE AQUÍ..." rows="2" style="font-family: 'Anton'; font-size: 1.4rem; resize: none; line-height: 1.2;"></textarea>
-            
-            <input type="file" id="fIn" class="form-control bg-dark text-white border-secondary mb-4" accept="video/*">
-            
-            <div class="d-flex justify-content-between align-items-center mb-4 px-2">
-                <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="mirrorCheck">
-                    <label class="small text-white">Modo Espejo</label>
-                </div>
-                <small class="text-muted" style="font-size: 0.7rem;">Diseño: Full Width + Logo Bottom</small>
+            <div class="mb-3">
+                <input type="text" id="tIn" class="form-control py-3" placeholder="TITULAR CORTO AQUÍ" maxlength="45" autocomplete="off">
+                <div id="charCount" class="char-counter">0 / 45</div>
             </div>
             
-            <button class="btn-go" onclick="process()">⚡ RENDERIZAR AHORA</button>
+            <input type="file" id="fIn" class="form-control mb-4" accept="video/*" style="font-family: sans-serif; font-size: 0.9rem; padding: 10px;">
+            
+            <div class="d-flex justify-content-center gap-3 mb-4">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="mirrorCheck">
+                    <label class="text-secondary small fw-bold">Modo Espejo</label>
+                </div>
+            </div>
+            
+            <button class="btn-go" onclick="process()">⚡ CREAR VIDEO ⚡</button>
         </div>
     <?php else: ?>
-        <div class="alert alert-danger text-center">❌ SISTEMA NO DISPONIBLE</div>
+        <div class="alert alert-danger text-center fw-bold">⚠️ FFMPEG NO DETECTADO</div>
     <?php endif; ?>
 
-    <div id="uiProcess" class="hidden text-center mt-5">
-        <div class="spinner-border text-warning mb-4" style="width: 3rem; height: 3rem;"></div>
-        <h4 class="fw-bold text-white" style="font-family: 'Anton';">PROCESANDO...</h4>
-        <p class="text-muted small">Aplicando psicología viral...</p>
+    <div id="uiProcess" class="hidden text-center py-4">
+        <div class="spinner-border text-warning mb-4" style="width: 4rem; height: 4rem; border-width: 5px;"></div>
+        <h3 class="text-white" style="font-family: 'Anton'">RENDERIZANDO...</h3>
+        <p class="text-muted small">Ajustando geometría y audio...</p>
     </div>
 
-    <div id="uiResult" class="hidden text-center mt-4">
+    <div id="uiResult" class="hidden text-center mt-3">
         <div id="videoContainer"></div>
-        <a id="dlLink" href="#" class="btn btn-warning w-100 mt-3 fw-bold py-3" style="font-family: 'Anton'; font-size: 1.2rem;">⬇️ DESCARGAR VIDEO</a>
-        <button onclick="location.reload()" class="btn btn-outline-light w-100 mt-3 btn-sm">Crear Otro</button>
+        <a id="dlLink" href="#" class="btn btn-warning w-100 mt-3 fw-bold py-3" style="font-family: 'Anton'; font-size: 1.2rem;">⬇️ DESCARGAR AHORA</a>
+        <button onclick="location.reload()" class="btn btn-outline-secondary w-100 mt-3">Crear Nuevo</button>
     </div>
 </div>
 
 <script>
+// Contador de Caracteres para Psicología Viral
+const tIn = document.getElementById('tIn');
+const counter = document.getElementById('charCount');
+
+if(tIn) {
+    tIn.addEventListener('input', function() {
+        this.value = this.value.toUpperCase(); // Forzar mayúsculas
+        const len = this.value.length;
+        counter.innerText = `${len} / 45`;
+        if(len >= 45) counter.classList.add('limit');
+        else counter.classList.remove('limit');
+    });
+}
+
 async function process() {
-    const tIn = document.getElementById('tIn').value;
     const fIn = document.getElementById('fIn').files[0];
-    if(!fIn) return alert("¡Sube un video!");
-    
+    if(!fIn) return alert("¡Falta el video!");
+    if(!tIn.value.trim() && !confirm("¿Video sin título?")) return;
+
     document.getElementById('uiInput').classList.add('hidden');
     document.getElementById('uiProcess').classList.remove('hidden');
 
     const fd = new FormData();
-    fd.append('videoTitle', tIn.toUpperCase());
+    fd.append('videoTitle', tIn.value);
     fd.append('videoFile', fIn);
     fd.append('mirrorMode', document.getElementById('mirrorCheck').checked);
 
@@ -312,7 +324,6 @@ function track(id) {
         } catch {}
     }, 2000);
 }
-document.getElementById('tIn')?.addEventListener('input', function() { this.value = this.value.toUpperCase(); });
 </script>
 </body>
 </html>
