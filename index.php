@@ -1,9 +1,8 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v56.0 (SMART LAYOUT)
-// Detecta automáticamente el formato del video (vertical u horizontal).
-// Ajusta el diseño para que el título NUNCA tape el contenido importante.
-// Mantiene el estilo de noticia impactante y el audio para cambio de hash.
+// VIRAL REELS MAKER v57.0 (SYNTAX FIXED)
+// Corrige el error "No such filter" reparando la cadena de filtros.
+// Mantiene: Smart Layout (Vertical/Horizontal), Titular Noticia, Hash Changer.
 // ==========================================
 
 // Configuración
@@ -37,10 +36,10 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 $action = $_GET['action'] ?? '';
 
 // ==========================================
-// 1. DETECCIÓN DEL SISTEMA
+// 1. DETECCIÓN
 // ==========================================
 $ffmpegPath = trim(shell_exec('which ffmpeg'));
-$ffprobePath = trim(shell_exec('which ffprobe')); // Necesario para analizar
+$ffprobePath = trim(shell_exec('which ffprobe'));
 
 $status = [
     'ffmpeg' => !empty($ffmpegPath),
@@ -55,7 +54,6 @@ if ($status['ffmpeg']) {
     $status['drawtext'] = (strpos($filters, 'drawtext') !== false);
 }
 
-// Función auxiliar para obtener dimensiones del video
 function getVideoDimensions($filePath, $ffprobePath) {
     $cmd = "$ffprobePath -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 " . escapeshellarg($filePath);
     $output = shell_exec($cmd);
@@ -63,35 +61,32 @@ function getVideoDimensions($filePath, $ffprobePath) {
     if (count($dims) == 2 && is_numeric($dims[0]) && is_numeric($dims[1])) {
         return ['w' => intval($dims[0]), 'h' => intval($dims[1])];
     }
-    return null;
+    return null; // Fallback
 }
 
 // ==========================================
 // 2. BACKEND
 // ==========================================
 
-// ---> DESCARGA
 if ($action === 'download' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     $filePath = "$processedDir/$file";
     if (file_exists($filePath)) {
         if (ob_get_level()) ob_end_clean();
         header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="VIRAL_SMART_'.date('Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_FIX_'.date('Hi').'.mp4"');
         header('Content-Length: ' . filesize($filePath));
         readfile($filePath);
         exit;
     }
 }
 
-// ---> PROCESAMIENTO INTELIGENTE
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    if (!$status['ffmpeg'] || !$status['ffprobe']) { echo json_encode(['status'=>'error', 'msg'=>'Falta FFmpeg o ffprobe en el sistema.']); exit; }
-    if (!$status['drawtext']) { echo json_encode(['status'=>'error', 'msg'=>'FFmpeg no soporta texto.']); exit; }
+    if (!$status['ffmpeg']) { echo json_encode(['status'=>'error', 'msg'=>'Error: FFmpeg no encontrado.']); exit; }
 
-    $jobId = uniqid('v56_');
+    $jobId = uniqid('v57_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
@@ -103,33 +98,33 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     chmod($inputFile, 0777);
 
-    // --- ANÁLISIS DEL VIDEO ---
+    // ANALIZAR VIDEO
     $dims = getVideoDimensions($inputFile, $ffprobePath);
-    if (!$dims) { echo json_encode(['status'=>'error', 'msg'=>'No se pudo analizar el video.']); exit; }
-    
-    // Calculamos la relación de aspecto. Si es < 0.7 lo consideramos vertical (ej. 9:16 es 0.56)
-    $aspectRatio = $dims['w'] / $dims['h'];
-    $isVertical = ($aspectRatio < 0.7); 
+    $isVertical = false;
+    if ($dims) {
+        $aspectRatio = $dims['w'] / $dims['h'];
+        $isVertical = ($aspectRatio < 0.8); // Consideramos vertical si es más alto que ancho
+    }
 
-    // Recursos
-    $useLogo = $status['logo'] = file_exists($logoPath);
-    $useFont = $status['font'];
-    $useAudio = $status['audio'];
+    // DATOS
+    $useLogo = file_exists($logoPath);
+    $useFont = file_exists($fontPath);
+    $useAudio = file_exists($audioPath);
     $useMirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     
-    // --- PREPARACIÓN DEL TEXTO ---
     $rawTitle = mb_strtoupper($_POST['videoTitle'] ?? '');
-    $wrappedText = wordwrap($rawTitle, 16, "\n", true); // Un poco más ancho
+    $wrappedText = wordwrap($rawTitle, 16, "\n", true);
     $lines = explode("\n", $wrappedText);
     if(count($lines) > 3) { $lines = array_slice($lines, 0, 3); $lines[2] .= ".."; }
     $count = count($lines);
 
-    // --- CONFIGURACIÓN DEL LAYOUT ---
+    // CONFIGURACIÓN LAYOUT
     $canvasW = 720;
     $canvasH = 1280;
-    // Altura reservada para el "Titular" en la parte superior
-    $headlineBarH = ($count == 3) ? 420 : (($count == 2) ? 320 : 220);
-    
+    // Espacio reservado para el titular (Barra superior)
+    $headlineH = ($count == 3) ? 420 : (($count == 2) ? 320 : 220);
+
+    // --- CONSTRUCCIÓN DEL COMANDO (CORREGIDA) ---
     $inputs = "-i " . escapeshellarg($inputFile);
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
     if ($useAudio) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
@@ -137,60 +132,51 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirrorCmd = $useMirror ? ",hflip" : "";
     $filter = "";
     
-    // A. LIENZO BASE (Negro)
+    // 1. BASE NEGRA
     $filter .= "color=c=black:s={$canvasW}x{$canvasH}[bg];";
     
-    // B. PROCESAMIENTO DEL VIDEO SEGÚN SU FORMA
+    // 2. VIDEO (SMART POSITIONING)
     if ($isVertical) {
-        // --- MODO VERTICAL: Video debajo del titular ---
-        // Escalamos el video para que quepa en el espacio restante debajo de la barra de título
-        $availableH = $canvasH - $headlineBarH;
-        $filter .= "[0:v]scale=-1:{$availableH}:force_original_aspect_ratio=decrease{$mirrorCmd}[vid];";
-        // Lo colocamos en el lienzo, desplazado hacia abajo
-        $filter .= "[bg][vid]overlay=(W-w)/2:{$headlineBarH}:format=auto:shortest=1[base];";
+        // Si es vertical, lo encogemos un poco y lo bajamos para dejar espacio al texto
+        $vidH = $canvasH - $headlineH;
+        $filter .= "[0:v]scale=-1:{$vidH}:force_original_aspect_ratio=decrease,setsar=1{$mirrorCmd}[vid];";
+        $filter .= "[bg][vid]overlay=(W-w)/2:{$headlineH}:shortest=1[base];"; // Overlay starts AFTER headline
     } else {
-        // --- MODO HORIZONTAL/CUADRADO: Estilo clásico ---
-        // Escalamos al ancho del lienzo
-        $filter .= "[0:v]scale={$canvasW}:-1:force_original_aspect_ratio=decrease{$mirrorCmd}[vid];";
-        // Lo centramos verticalmente. El título quedará en la franja negra superior.
-        $filter .= "[bg][vid]overlay=0:(H-h)/2:format=auto:shortest=1[base];";
+        // Si es horizontal, va al centro
+        $filter .= "[0:v]scale={$canvasW}:-1:force_original_aspect_ratio=decrease,setsar=1{$mirrorCmd}[vid];";
+        $filter .= "[bg][vid]overlay=(W-w)/2:(H-h)/2:shortest=1[base];";
     }
-    $lastStream = "[base]";
+    
+    // 3. BARRA DE TITULAR (SÓLIDA)
+    // Usamos el stream [base] creado arriba
+    $filter .= "[base]drawbox=x=0:y=0:w=iw:h={$headlineH}:color=black@1:t=fill[v_boxed];";
+    $lastStream = "[v_boxed]"; // Puntero al último stream válido
 
-    // C. DIBUJAR LA BARRA DE TITULAR (Siempre arriba, sólida)
-    // Esto crea una zona segura para el texto y el logo.
-    $filter .= "{$lastStream}drawbox=x=0:y=0:w=iw:h={$headlineBarH}:color=black@1:t=fill[headline_area];";
-    $lastStream = "[headline_area]";
-
-    // D. DIBUJAR TEXTO (Dentro de la zona segura)
+    // 4. TEXTO (NOTICIA)
     if ($useFont && !empty($lines)) {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        // Ajustamos tamaños y posiciones relativos a la barra superior
         $fSize = ($count == 1) ? 100 : (($count == 2) ? 90 : 80);
-        // Posiciones Y iniciales para 1, 2 o 3 líneas
-        $startYs = ($count == 1) ? [100] : (($count == 2) ? [90, 190] : [80, 175, 270]);
+        $startYs = ($count == 1) ? [80] : (($count == 2) ? [70, 170] : [60, 155, 250]);
 
         foreach ($lines as $i => $line) {
             $y = $startYs[$i];
-            // Estilo de noticia impactante (amarillo, borde grueso)
-            $filter .= ",drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=2:shadowy=2:x=(w-text_w)/2:y={$y}";
+            // Aquí está la corrección: Encadenamos el filtro al stream anterior
+            $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=5:bordercolor=black:shadowx=3:shadowy=3:x=(w-text_w)/2:y={$y}[v_text_{$i}];";
+            $lastStream = "[v_text_{$i}]"; // Actualizamos el puntero
         }
     }
-    $filter .= "[vtext];";
-    $lastStream = "[vtext]";
 
-    // E. LOGO (Dentro de la zona segura, esquina superior izquierda)
+    // 5. LOGO
     if ($useLogo) {
-        // Logo un poco más pequeño para que no compita con el texto
         $filter .= "[1:v]scale=-1:70[logo_s];";
-        // Posición fija en la barra superior
-        $filter .= "{$lastStream}[logo_s]overlay=30:40[vfinal]";
+        $filter .= "{$lastStream}[logo_s]overlay=30:30[vfinal]";
         $lastStream = "[vfinal]";
     } else {
+        // Si no hay logo, renombramos el último stream a vfinal
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // F. AUDIO (Mezcla para hash único)
+    // 6. AUDIO MIX
     if ($useAudio) {
         $mIdx = $useLogo ? "2" : "1";
         $filter .= ";[{$mIdx}:a]volume=0.2[bgm];[0:a]volume=1.0[voice];[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
@@ -199,7 +185,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // EJECUCIÓN
-    $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs -filter_complex \"$filter\" -map \"$lastStream\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 27 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
+    $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 27 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     file_put_contents($logFile, "\n--- JOB $jobId ---\nCMD: $cmd\n", FILE_APPEND);
     exec($cmd);
@@ -209,27 +195,19 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
-// ---> STATUS
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
-    
     if (file_exists($jFile)) {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
-        
         if (file_exists($fullPath) && filesize($fullPath) > 50000) {
-            chmod($fullPath, 0777); 
+            chmod($fullPath, 0777);
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
+        } elseif (time() - $data['start'] > 900) {
+            echo json_encode(['status' => 'error', 'msg' => 'Timeout']);
         } else {
-            $logTail = shell_exec("tail -n 3 " . escapeshellarg($logFile));
-            if (strpos($logTail, 'Error') !== false || strpos($logTail, 'Invalid') !== false) {
-                 echo json_encode(['status' => 'error', 'msg' => 'FFmpeg Error: ' . substr($logTail, 0, 100)]);
-            } elseif (time() - $data['start'] > 900) {
-                 echo json_encode(['status' => 'error', 'msg' => 'Timeout.']);
-            } else {
-                 echo json_encode(['status' => 'processing']);
-            }
+            echo json_encode(['status' => 'processing']);
         }
     } else { echo json_encode(['status' => 'error']); }
     exit;
@@ -241,16 +219,14 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral v56 Smart</title>
+    <title>Viral v57 Fixed</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;900&display=swap" rel="stylesheet">
     <style>
         body { background: #000; color: #fff; padding: 20px; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
         .card { background: #111; border: 1px solid #333; max-width: 500px; width: 100%; padding: 25px; border-radius: 20px; box-shadow: 0 0 40px rgba(255, 200, 0, 0.15); }
-        .status-table { width: 100%; margin-bottom: 20px; border-collapse: separate; border-spacing: 0 5px; font-size: 0.85rem; }
-        .status-table td { padding: 8px 12px; background: #1a1a1a; border-radius: 4px; }
-        .ok { color: #0f0; font-weight: bold; text-align: right; } 
-        .fail { color: #f00; font-weight: bold; text-align: right; }
+        .status-table { width: 100%; margin-bottom: 20px; font-size: 0.85rem; }
+        .ok { color: #0f0; font-weight: bold; } .fail { color: #f00; font-weight: bold; }
         .btn-go { width: 100%; padding: 15px; background: linear-gradient(45deg, #FFD700, #FFA500); color: #000; font-family: 'Anton'; font-size: 1.3rem; border: none; border-radius: 10px; cursor: pointer; transition: transform 0.2s; }
         .btn-go:hover { transform: scale(1.03); }
         .hidden { display: none; }
@@ -261,44 +237,38 @@ if ($action === 'status') {
 <body>
 
 <div class="card">
-    <h2 class="text-center mb-4 text-warning fw-bold" style="font-family: 'Anton'; letter-spacing: 2px; text-transform: uppercase;">Sistema Inteligente v56</h2>
+    <h2 class="text-center mb-4 text-warning fw-bold" style="font-family: 'Anton';">SISTEMA v57</h2>
 
-    <table class="status-table">
-        <tr><td>Motor y Analizador</td><td class="<?php echo ($status['ffmpeg'] && $status['ffprobe'])?'ok':'fail'; ?>"><?php echo ($status['ffmpeg'] && $status['ffprobe'])?'LISTOS':'ERROR'; ?></td></tr>
-        <tr><td>Soporte Texto</td><td class="<?php echo $status['drawtext']?'ok':'fail'; ?>"><?php echo $status['drawtext']?'OK':'ERROR'; ?></td></tr>
-        <tr><td>Fuente (font.ttf)</td><td class="<?php echo $status['font']?'ok':'fail'; ?>"><?php echo $status['font']?'OK':'FALTA'; ?></td></tr>
-        <tr><td>Audio (news.mp3)</td><td class="<?php echo $status['audio']?'ok':'fail'; ?>"><?php echo $status['audio']?'OK':'FALTA'; ?></td></tr>
-    </table>
+    <div class="small mb-3 text-center text-muted">
+        Motor: <span class="<?php echo $status['ffmpeg']?'ok':'fail'; ?>"><?php echo $status['ffmpeg']?'ACTIVO':'ERROR'; ?></span> | 
+        Texto: <span class="<?php echo $status['drawtext']?'ok':'fail'; ?>"><?php echo $status['drawtext']?'OK':'ERROR'; ?></span>
+    </div>
 
-    <?php if ($status['ffmpeg'] && $status['ffprobe'] && $status['drawtext']): ?>
+    <?php if ($status['ffmpeg'] && $status['drawtext']): ?>
         <div id="uiInput">
-            <textarea id="tIn" class="form-control bg-dark text-white border-warning mb-3 fw-bold text-center" placeholder="ESCRIBE TU TITULAR IMPACTANTE AQUÍ..." rows="3" style="font-family: 'Anton'; font-size: 1.2rem; resize: none;"></textarea>
+            <textarea id="tIn" class="form-control bg-dark text-white border-warning mb-3 fw-bold text-center" placeholder="TITULAR DE NOTICIA..." rows="3" style="font-family: 'Anton'; font-size: 1.2rem; resize: none;"></textarea>
             <input type="file" id="fIn" class="form-control bg-dark text-white border-secondary mb-3" accept="video/*">
             <div class="d-flex justify-content-center align-items-center gap-2 mb-4 p-2 bg-black rounded">
                 <div class="form-check form-switch m-0">
                     <input class="form-check-input" type="checkbox" id="mirrorCheck">
                 </div>
-                <span class="small text-white">Modo Espejo (Anti-Copyright)</span>
+                <span class="small text-white">Modo Espejo</span>
             </div>
-            <button class="btn-go" onclick="process()">🚀 GENERAR VIDEO VIRAL</button>
-            <p class="text-center text-muted small mt-2">Detecta automáticamente el formato y ajusta el diseño.</p>
+            <button class="btn-go" onclick="process()">GENERAR VIDEO</button>
         </div>
     <?php else: ?>
-        <div class="alert alert-danger text-center p-3 border border-danger rounded bg-transparent">
-            ❌ <strong>SISTEMA NO LISTO</strong><br>Revisa que FFmpeg esté instalado y los archivos necesarios subidos.
-        </div>
+        <div class="alert alert-danger text-center">❌ SISTEMA NO DISPONIBLE</div>
     <?php endif; ?>
 
     <div id="uiProcess" class="hidden text-center mt-5">
-        <div class="spinner-border text-warning mb-4" style="width: 3rem; height: 3rem;"></div>
-        <h4 class="fw-bold text-warning" style="font-family: 'Anton';">ANALIZANDO Y PROCESANDO...</h4>
-        <p class="text-muted">Creando layout inteligente y mezclando audio...</p>
+        <div class="spinner-border text-warning mb-4"></div>
+        <h4 class="fw-bold text-warning" style="font-family: 'Anton';">PROCESANDO...</h4>
     </div>
 
     <div id="uiResult" class="hidden text-center mt-4">
         <div id="videoContainer"></div>
-        <a id="dlLink" href="#" class="btn btn-warning w-100 mt-3 fw-bold py-3" style="font-family: 'Anton'; font-size: 1.2rem;">⬇️ DESCARGAR RESULTADO</a>
-        <button onclick="location.reload()" class="btn btn-outline-light w-100 mt-3 btn-sm">Crear Otro Video</button>
+        <a id="dlLink" href="#" class="btn btn-warning w-100 mt-3 fw-bold py-3" style="font-family: 'Anton'; font-size: 1.2rem;">⬇️ DESCARGAR</a>
+        <button onclick="location.reload()" class="btn btn-outline-light w-100 mt-3 btn-sm">Nuevo</button>
     </div>
 </div>
 
@@ -306,9 +276,8 @@ if ($action === 'status') {
 async function process() {
     const tIn = document.getElementById('tIn').value;
     const fIn = document.getElementById('fIn').files[0];
-    
-    if(!fIn) return alert("¡Sube un video para comenzar!");
-    if(!tIn.trim()) if(!confirm("¿Seguro que quieres enviarlo SIN titular?")) return;
+    if(!fIn) return alert("¡Sube un video!");
+    if(!tIn.trim() && !confirm("¿Sin título?")) return;
 
     document.getElementById('uiInput').classList.add('hidden');
     document.getElementById('uiProcess').classList.remove('hidden');
@@ -323,7 +292,7 @@ async function process() {
         const data = await res.json();
         if(data.status === 'success') track(data.jobId);
         else { alert("Error: " + data.msg); location.reload(); }
-    } catch(e) { alert("Error de conexión. Intenta de nuevo."); location.reload(); }
+    } catch(e) { alert("Error de red"); location.reload(); }
 }
 
 function track(id) {
@@ -340,7 +309,7 @@ function track(id) {
                     `<video src="processed/${data.file}?t=${Date.now()}" controls autoplay muted loop class="w-100 h-100"></video>`;
             } else if(data.status === 'error') {
                 clearInterval(i);
-                alert("Ocurrió un error: " + data.msg); location.reload();
+                alert("Error: " + data.msg); location.reload();
             }
         } catch {}
     }, 2000);
