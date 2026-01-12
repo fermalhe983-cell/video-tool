@@ -1,17 +1,16 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v63.0 (GOLD MASTER)
-// Versión Definitiva de Producción.
-// - Motor: Rápido (v62).
-// - Diseño: Viral News (v62).
-// - Gestión: Botón "Borrar y Nuevo" para ahorrar espacio en disco.
+// VIRAL REELS MAKER v63.1 (GOLD MASTER PRO)
+// Versión Mejorada - Soporte videos hasta 5 minutos
+// - Audio en loop automático para videos largos
+// - Optimizado para videos cortos (10s) y largos (5min)
 // ==========================================
 
 // Configuración
 @ini_set('display_errors', 0);
 @ini_set('upload_max_filesize', '2048M');
 @ini_set('post_max_size', '2048M');
-@ini_set('max_execution_time', 1200);
+@ini_set('max_execution_time', 1800); // 30 minutos para videos largos
 
 // Rutas
 $baseDir = __DIR__;
@@ -28,10 +27,10 @@ if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
 if (!file_exists($processedDir)) mkdir($processedDir, 0777, true);
 if (!file_exists($jobsDir)) mkdir($jobsDir, 0777, true);
 
-// Limpieza Automática (Archivos viejos de más de 1 hora)
+// Limpieza Automática (Archivos viejos de más de 2 horas para videos largos)
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     foreach (glob("$dir/*") as $file) {
-        if (is_file($file) && (time() - filemtime($file) > 3600)) @unlink($file);
+        if (is_file($file) && (time() - filemtime($file) > 7200)) @unlink($file);
     }
 }
 
@@ -70,7 +69,7 @@ if ($action === 'download' && isset($_GET['file'])) {
     }
 }
 
-// ---> BORRADO MANUAL (NUEVO EN v63)
+// ---> BORRADO MANUAL
 if ($action === 'delete_job' && isset($_GET['file'])) {
     $file = basename($_GET['file']);
     // Borrar el video final
@@ -78,8 +77,8 @@ if ($action === 'delete_job' && isset($_GET['file'])) {
     
     // Intentar borrar los archivos temporales asociados (por ID)
     $jobId = explode('_', $file)[0]; // "v63_xxxx"
-    foreach (glob("$uploadDir/{$jobId}_*") as $f) @unlink($f); // Borrar video subido
-    foreach (glob("$jobsDir/{$jobId}*") as $f) @unlink($f); // Borrar json
+    foreach (glob("$uploadDir/{$jobId}_*") as $f) @unlink($f);
+    foreach (glob("$jobsDir/{$jobId}*") as $f) @unlink($f);
     
     header('Location: ?msg=deleted');
     exit;
@@ -89,7 +88,10 @@ if ($action === 'delete_job' && isset($_GET['file'])) {
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
     
-    if (!$status['ffmpeg']) { echo json_encode(['status'=>'error', 'msg'=>'Error: FFmpeg no encontrado.']); exit; }
+    if (!$status['ffmpeg']) { 
+        echo json_encode(['status'=>'error', 'msg'=>'Error: FFmpeg no encontrado.']); 
+        exit; 
+    }
 
     $jobId = uniqid('v63_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
@@ -100,6 +102,15 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile);
     chmod($inputFile, 0777);
+
+    // Obtener duración del video para calcular repeticiones del audio
+    $durationCmd = escapeshellarg($ffmpegPath) . " -i " . escapeshellarg($inputFile) . " 2>&1 | grep Duration";
+    $durationOutput = shell_exec($durationCmd);
+    preg_match('/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/', $durationOutput, $matches);
+    $videoDuration = 0;
+    if (count($matches) >= 4) {
+        $videoDuration = ($matches[1] * 3600) + ($matches[2] * 60) + $matches[3];
+    }
 
     // DATOS
     $useLogo = file_exists($logoPath);
@@ -128,9 +139,14 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $fSize = 70; $startYs = [30, 110]; $videoY = 210;
     }
 
+    // INPUTS
     $inputs = "-i " . escapeshellarg($inputFile);
     if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
-    if ($useAudio) $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
+    
+    // Audio de fondo con loop infinito (-stream_loop -1 hace que se repita indefinidamente)
+    if ($useAudio) {
+        $inputs .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
+    }
 
     $mirrorCmd = $useMirror ? ",hflip" : "";
     
@@ -138,7 +154,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $filter = "";
     
     // 1. LIENZO
-    $filter .= "color=c=#080808:s={$canvasW}x{$canvasH}[bg];";
+    $filter .= "color=c=#080808:s={$canvasW}x{$canvasH}:d=" . ceil($videoDuration) . "[bg];";
     
     // 2. VIDEO (SPEED + COLOR)
     $filter .= "[0:v]scale={$canvasW}:-1,setsar=1{$mirrorCmd},eq=saturation=1.15:contrast=1.05,setpts=0.98*PTS[vid];";
@@ -150,7 +166,8 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $fontSafe = str_replace('\\', '/', realpath($fontPath));
         foreach ($lines as $i => $line) {
             $y = $startYs[$i];
-            $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$line':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=4:shadowy=4:x=(w-text_w)/2:y={$y}[v_text_{$i}];";
+            $lineSafe = str_replace("'", "\\'", $line);
+            $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$lineSafe':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=4:shadowy=4:x=(w-text_w)/2:y={$y}[v_text_{$i}];";
             $lastStream = "[v_text_{$i}]";
         }
     }
@@ -165,41 +182,72 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $filter .= "{$lastStream}copy[vfinal]";
     }
 
-    // 5. AUDIO
+    // 5. AUDIO - MEJORADO PARA VIDEOS LARGOS
     if ($useAudio) {
         $mIdx = $useLogo ? "2" : "1";
+        
+        // Procesar audio original del video (voz)
         $filter .= ";[0:a]atempo=1.02,volume=1.0[voice];";
-        $filter .= "[{$mIdx}:a]volume=0.15[bgm];";
-        $filter .= "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=2[afinal]";
+        
+        // Audio de fondo (BGM) - ya está en loop por -stream_loop -1
+        // Usamos aloop para asegurar que se repita internamente también
+        $filter .= "[{$mIdx}:a]volume=0.15,aloop=loop=-1:size=2e+09[bgm];";
+        
+        // Mezclar ambos audios - duration=first toma la duración del primer input (voice)
+        // Esto asegura que el audio dure lo mismo que el video
+        $filter .= "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[afinal]";
     } else {
-        $filter .= ";[0:a]atempo=1.02[afinal]";
+        // Solo audio del video original
+        $filter .= ";[0:a]atempo=1.02,volume=1.0[afinal]";
     }
 
-    // EJECUCIÓN
-    $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs -filter_complex \"$filter\" -map \"[vfinal]\" -map \"[afinal]\" -c:v libx264 -preset ultrafast -threads 2 -crf 28 -pix_fmt yuv420p -c:a aac -b:a 128k -movflags +faststart " . escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
+    // COMANDO FFMPEG OPTIMIZADO
+    $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs " .
+           "-filter_complex \"$filter\" " .
+           "-map \"[vfinal]\" -map \"[afinal]\" " .
+           "-c:v libx264 -preset ultrafast -threads 4 -crf 26 " .
+           "-pix_fmt yuv420p " .
+           "-c:a aac -b:a 128k -ar 44100 " .
+           "-movflags +faststart " .
+           "-shortest " .  // IMPORTANTE: Detiene cuando el stream más corto termina
+           escapeshellarg($outputFile) . " >> $logFile 2>&1 &";
 
     exec($cmd);
 
-    file_put_contents($jobFile, json_encode(['status' => 'processing', 'file' => $outputFileName, 'start' => time()]));
+    file_put_contents($jobFile, json_encode([
+        'status' => 'processing', 
+        'file' => $outputFileName, 
+        'start' => time(),
+        'duration' => $videoDuration
+    ]));
+    
     echo json_encode(['status' => 'success', 'jobId' => $jobId]);
     exit;
 }
 
+// ---> VERIFICAR ESTADO
 if ($action === 'status') {
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId']);
     $jFile = "$jobsDir/$id.json";
+    
     if (file_exists($jFile)) {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . $data['file'];
+        
         if (file_exists($fullPath) && filesize($fullPath) > 50000) {
             chmod($fullPath, 0777);
             echo json_encode(['status' => 'finished', 'file' => $data['file']]);
-        } elseif (time() - $data['start'] > 900) {
-            echo json_encode(['status' => 'error', 'msg' => 'Timeout']);
+        } elseif (time() - $data['start'] > 1500) { // 25 minutos timeout para videos largos
+            echo json_encode(['status' => 'error', 'msg' => 'Timeout - Video muy largo']);
         } else {
-            echo json_encode(['status' => 'processing']);
+            // Calcular progreso aproximado
+            $elapsed = time() - $data['start'];
+            $progress = min(95, ($elapsed / max(1, ($data['duration'] ?? 60))) * 100);
+            echo json_encode(['status' => 'processing', 'progress' => round($progress)]);
         }
-    } else { echo json_encode(['status' => 'error']); }
+    } else { 
+        echo json_encode(['status' => 'error', 'msg' => 'Job no encontrado']); 
+    }
     exit;
 }
 ?>
@@ -209,7 +257,7 @@ if ($action === 'status') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Maker Gold</title>
+    <title>Viral Maker Gold Pro</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
@@ -226,6 +274,7 @@ if ($action === 'status') {
         
         .btn-go { width: 100%; padding: 18px; background: linear-gradient(135deg, #FFD700, #FFA500); color: #000; font-family: 'Anton'; font-size: 1.4rem; border: none; border-radius: 12px; cursor: pointer; transition: 0.2s; }
         .btn-go:hover { transform: scale(1.02); background: #fff; }
+        .btn-go:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .btn-clean { background: #333; color: #aaa; border: 1px solid #444; width: 100%; padding: 12px; border-radius: 12px; font-weight: bold; transition: 0.2s; }
         .btn-clean:hover { background: #f00; color: #fff; border-color: #f00; }
@@ -233,18 +282,27 @@ if ($action === 'status') {
         .hidden { display: none; }
         #videoContainer { width: 100%; aspect-ratio: 9/16; background: #000; margin-top: 20px; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
         video { width: 100%; height: 100%; object-fit: cover; }
+        
+        .progress { height: 8px; background: #222; border-radius: 10px; overflow: hidden; }
+        .progress-bar { background: linear-gradient(90deg, #FFD700, #FFA500); transition: width 0.3s; }
+        
+        .alert-info { background: #1a3a4a; border-color: #2a5a7a; color: #6fc3df; }
     </style>
 </head>
 <body>
 
 <div class="card">
     <div class="text-center mb-4">
-        <h2>VIRAL MAKER <span class="text-warning">v63</span></h2>
-        <p class="text-muted small m-0">PRODUCCIÓN FINAL</p>
+        <h2>VIRAL MAKER <span class="text-warning">PRO v63.1</span></h2>
+        <p class="text-muted small m-0">SOPORTE HASTA 5 MINUTOS</p>
     </div>
 
     <?php if ($status['ffmpeg']): ?>
         <div id="uiInput">
+            <div class="alert alert-info small mb-3">
+                ℹ️ Soporta videos de 10 segundos hasta 5 minutos. El audio se repetirá automáticamente.
+            </div>
+            
             <div class="mb-3">
                 <input type="text" id="tIn" class="form-control py-3" placeholder="TITULAR IMPACTANTE" maxlength="36" autocomplete="off">
                 <div id="charCount" class="char-counter">0 / 36</div>
@@ -268,7 +326,11 @@ if ($action === 'status') {
     <div id="uiProcess" class="hidden text-center py-4">
         <div class="spinner-border text-warning mb-4" style="width: 4rem; height: 4rem;"></div>
         <h3 class="text-white" style="font-family: 'Anton'">RENDERIZANDO...</h3>
-        <p class="text-success small">Aplicando Evasión Pro + Titular...</p>
+        <p class="text-success small mb-3">Aplicando Evasión Pro + Titular + Audio Loop...</p>
+        <div class="progress">
+            <div id="progressBar" class="progress-bar" style="width: 0%"></div>
+        </div>
+        <p class="text-muted small mt-2"><span id="progressText">0</span>% completado</p>
     </div>
 
     <div id="uiResult" class="hidden text-center mt-3">
@@ -304,6 +366,11 @@ async function process() {
     const fIn = document.getElementById('fIn').files[0];
     if(!fIn) return alert("¡Falta el video!");
     
+    // Validar tamaño (máximo 500MB)
+    if(fIn.size > 500 * 1024 * 1024) {
+        return alert("⚠️ El video es muy grande. Máximo 500MB.");
+    }
+    
     document.getElementById('uiInput').classList.add('hidden');
     document.getElementById('uiProcess').classList.remove('hidden');
 
@@ -315,16 +382,27 @@ async function process() {
     try {
         const res = await fetch('?action=upload', {method:'POST', body:fd});
         const data = await res.json();
-        if(data.status === 'success') track(data.jobId);
-        else { alert("Error: " + data.msg); location.reload(); }
-    } catch(e) { alert("Error red"); location.reload(); }
+        if(data.status === 'success') {
+            track(data.jobId);
+        } else { 
+            alert("Error: " + data.msg); 
+            location.reload(); 
+        }
+    } catch(e) { 
+        alert("Error de conexión: " + e.message); 
+        location.reload(); 
+    }
 }
 
 function track(id) {
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    
     const i = setInterval(async () => {
         try {
             const res = await fetch(`?action=status&jobId=${id}`);
             const data = await res.json();
+            
             if(data.status === 'finished') {
                 clearInterval(i);
                 currentFile = data.file;
@@ -335,15 +413,26 @@ function track(id) {
                     `<video src="processed/${data.file}?t=${Date.now()}" controls autoplay muted loop class="w-100 h-100"></video>`;
             } else if(data.status === 'error') {
                 clearInterval(i);
-                alert("Error: " + data.msg); location.reload();
+                alert("❌ Error: " + (data.msg || 'Error desconocido')); 
+                location.reload();
+            } else if(data.status === 'processing') {
+                // Actualizar barra de progreso
+                if(data.progress) {
+                    progressBar.style.width = data.progress + '%';
+                    progressText.textContent = data.progress;
+                }
             }
-        } catch {}
+        } catch(e) {
+            console.error('Error checking status:', e);
+        }
     }, 2000);
 }
 
 function cleanAndNew() {
     if(currentFile) {
-        window.location.href = '?action=delete_job&file=' + currentFile;
+        if(confirm('¿Borrar el video del servidor y crear uno nuevo?')) {
+            window.location.href = '?action=delete_job&file=' + currentFile;
+        }
     } else {
         location.reload();
     }
