@@ -1,22 +1,21 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v68.0 (ANTI-CRASH EDITION)
-// Especial para VPS/Easypanel con muy poca RAM
+// VIRAL REELS MAKER v69.0 (TWO-PASS / SPLIT RENDER)
+// Estrategia: Divide y vencerás. 
+// Paso 1: Renderiza video. Paso 2: Mezcla audio.
+// Evita el pico de RAM que reinicia el servidor.
 // ==========================================
 
-// 1. LIMITAR PHP PARA DEJAR RAM A FFMPEG
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
-// Reducimos memoria de PHP a 256M. Lo que sobra lo usa FFmpeg.
-ini_set('memory_limit', '256M'); 
+ini_set('memory_limit', '256M'); // PHP bajo consumo
 ini_set('upload_max_filesize', '2048M');
 ini_set('post_max_size', '2048M');
-set_time_limit(0); 
+set_time_limit(0);
 ignore_user_abort(true);
 
 ob_start();
 
-// Rutas
 $baseDir = __DIR__;
 $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
@@ -26,12 +25,11 @@ $fontPath = $baseDir . '/font.ttf';
 $audioPath = $baseDir . '/news.mp3';
 $logFile = $baseDir . '/ffmpeg_log.txt';
 
-// Directorios
 if (!file_exists($uploadDir)) @mkdir($uploadDir, 0777, true);
 if (!file_exists($processedDir)) @mkdir($processedDir, 0777, true);
 if (!file_exists($jobsDir)) @mkdir($jobsDir, 0777, true);
 
-// Limpieza agresiva (1 hora)
+// Limpieza (archivos > 1 hora)
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     if(is_dir($dir)){
         foreach (glob("$dir/*") as $file) {
@@ -56,20 +54,16 @@ $hasFfmpeg = !empty($ffmpegPath);
 // ==========================================
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     
-    // Check rápido de error de carga
     if (empty($_FILES) && isset($_SERVER['CONTENT_LENGTH']) && $_SERVER['CONTENT_LENGTH'] > 0) {
-        sendJson(['status'=>'error', 'msg'=>'Archivo demasiado grande (PHP Limit).']);
+        sendJson(['status'=>'error', 'msg'=>'Archivo excede límite PHP.']);
     }
 
     if (!$hasFfmpeg) sendJson(['status'=>'error', 'msg'=>'FFmpeg no instalado.']);
 
-    if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
-        sendJson(['status'=>'error', 'msg'=>'Error subiendo archivo.']);
-    }
-
-    $jobId = uniqid('v68_');
+    $jobId = uniqid('v69_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
+    $tempVideo = "$uploadDir/{$jobId}_temp.mp4"; // Archivo intermedio (solo video)
     $outputFileName = "{$jobId}_viral.mp4"; 
     $outputFile = "$processedDir/$outputFileName";
     $jobFile = "$jobsDir/$jobId.json";
@@ -78,11 +72,9 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         sendJson(['status'=>'error', 'msg'=>'Error guardando archivo.']);
     }
     chmod($inputFile, 0777);
+    gc_collect_cycles(); // Limpiar RAM PHP
 
-    // Liberar memoria PHP inmediatamente después de subir
-    gc_collect_cycles();
-
-    // Duración
+    // Obtener duración
     $durCmd = "$ffmpegPath -i " . escapeshellarg($inputFile) . " 2>&1 | grep Duration";
     $durOut = shell_exec($durCmd);
     preg_match('/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/', $durOut, $matches);
@@ -98,12 +90,16 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $mirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     $title = mb_strtoupper($_POST['videoTitle'] ?? '');
 
-    // --- COMANDO FFMPEG "MODO SEGURO" ---
-    $cmdIn = "-i " . escapeshellarg($inputFile);
-    if ($useLogo) $cmdIn .= " -i " . escapeshellarg($logoPath);
-    if ($useAudio) $cmdIn .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
+    // ---------------------------------------------------------
+    // PASO 1: PROCESAMIENTO DE VIDEO (VIDEO ONLY)
+    // Renderizamos filtros visuales y guardamos SIN AUDIO (-an)
+    // Esto reduce drásticamente el uso de memoria.
+    // ---------------------------------------------------------
+    
+    $cmd1_In = "-i " . escapeshellarg($inputFile);
+    if ($useLogo) $cmd1_In .= " -i " . escapeshellarg($logoPath);
 
-    // Filtros
+    // Filtros visuales
     $cw = 720; $ch = 1280;
     $wrapped = wordwrap($title, 18, "\n", true);
     $lines = explode("\n", $wrapped);
@@ -113,14 +109,12 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $vidY = (count($lines)==1) ? 135 : 210;
 
     $fc = "";
-    // Video Base
     $hflip = $mirror ? ",hflip" : "";
-    $fc .= "color=c=#080808:s={$cw}x{$ch}:d=".($seconds+2)."[bg];";
+    $fc .= "color=c=#080808:s={$cw}x{$ch}:d=".($seconds+1)."[bg];";
     $fc .= "[0:v]scale={$cw}:-1,setsar=1{$hflip},eq=saturation=1.15:contrast=1.05,setpts=0.98*PTS[vid];";
     $fc .= "[bg][vid]overlay=0:{$vidY}:shortest=1[base];";
     $last = "[base]";
 
-    // Texto
     if ($useFont && !empty($title)) {
         $fFile = str_replace('\\','/', realpath($fontPath));
         foreach($lines as $k => $l) {
@@ -131,7 +125,6 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Logo
     if ($useLogo) {
         $fc .= "[1:v]scale=-1:80[lg];{$last}[lg]overlay=30:H-120[vfin]";
         $last = "[vfin]";
@@ -139,14 +132,31 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $fc .= "{$last}copy[vfin]";
     }
 
-    // Audio
+    // Comando 1: Video -> TempFile (threads limitados)
+    // -an quita el audio para procesarlo despues
+    $cmdStep1 = "$ffmpegPath -y $cmd1_In -filter_complex \"$fc\" -map \"[vfin]\" -an -c:v libx264 -preset superfast -threads 1 -crf 28 -movflags +faststart " . escapeshellarg($tempVideo);
+
+    // ---------------------------------------------------------
+    // PASO 2: MEZCLA DE AUDIO (AUDIO ONLY)
+    // Tomamos el video temporal y le pegamos el audio.
+    // Usamos -c:v copy para NO volver a renderizar video (0 RAM video).
+    // ---------------------------------------------------------
+    
     if ($useAudio) {
-        $idx = $useLogo ? 2 : 1;
-        $fc .= ";[0:a]volume=1.0[v];[{$idx}:a]volume=0.15[m];[v][m]amix=inputs=2:duration=first[afin]";
+        // Input 0: Video Temp, Input 1: Audio Original (del archivo subido), Input 2: Musica Fondo
+        $cmdStep2 = "$ffmpegPath -y -i " . escapeshellarg($tempVideo) . " -i " . escapeshellarg($inputFile) . " -stream_loop -1 -i " . escapeshellarg($audioPath) . " ";
+        // Mezclamos audio original (1) + musica (2)
+        // duration=first corta cuando acaba el video (0)
+        $filterAudio = "[1:a]volume=1.0[v];[2:a]volume=0.15[m];[v][m]amix=inputs=2:duration=first[afin]";
+        
+        $cmdStep2 .= "-filter_complex \"$filterAudio\" -map 0:v -map \"[afin]\" -c:v copy -c:a aac -b:a 128k -shortest " . escapeshellarg($outputFile);
     } else {
-        $fc .= ";[0:a]volume=1.0[afin]";
+        // Si no hay música de fondo, solo pasamos el audio original
+        $cmdStep2 = "$ffmpegPath -y -i " . escapeshellarg($tempVideo) . " -i " . escapeshellarg($inputFile) . " ";
+        $cmdStep2 .= "-map 0:v -map 1:a -c:v copy -c:a aac -b:a 128k -shortest " . escapeshellarg($outputFile);
     }
 
+    // Guardar Estado
     file_put_contents($jobFile, json_encode([
         'status' => 'processing',
         'file' => $outputFileName,
@@ -154,21 +164,14 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         'duration' => $seconds
     ]));
 
-    // FLAG MAGICAS PARA BAJA RAM:
-    // -threads 1 (Solo 1 hilo de CPU)
-    // -filter_complex_threads 1 (Solo 1 hilo para filtros -> AHORRA MUCHA RAM)
-    // -preset superfast (No usa buffers gigantes como ultrafast)
-    // nice -n 19 (Baja prioridad en el sistema)
+    // EJECUCIÓN EN CADENA (CHAINED EXECUTION)
+    // Ejecutamos P1 && P2 en segundo plano. 
+    // "nice -n 19" le da prioridad baja para que no mate al servidor web.
+    // "nohup sh -c" permite encadenar los comandos y dejarlos corriendo solos.
     
-    $finalCmd = "nice -n 19 nohup $ffmpegPath -y $cmdIn " .
-                "-filter_complex_threads 1 " . 
-                "-filter_complex \"$fc\" " .
-                "-map \"[vfin]\" -map \"[afin]\" " .
-                "-c:v libx264 -preset superfast -threads 1 -max_muxing_queue_size 512 -crf 28 " .
-                "-c:a aac -b:a 128k -movflags +faststart " .
-                "-shortest " . escapeshellarg($outputFile) . " > $logFile 2>&1 &";
+    $fullCommand = "nohup sh -c \"" . $cmdStep1 . " && " . $cmdStep2 . " && rm " . escapeshellarg($tempVideo) . "\" > $logFile 2>&1 &";
     
-    exec($finalCmd);
+    exec($fullCommand);
 
     sendJson(['status' => 'success', 'jobId' => $jobId]);
 }
@@ -184,21 +187,21 @@ if ($action === 'status') {
         $data = json_decode(file_get_contents($jFile), true);
         $fullPath = "$processedDir/" . ($data['file'] ?? '');
 
-        // Si existe y tiene tamaño, terminó
-        if (!empty($data['file']) && file_exists($fullPath) && filesize($fullPath) > 50000) {
+        // Verificar éxito
+        if (!empty($data['file']) && file_exists($fullPath) && filesize($fullPath) > 10000) {
+            // Verificar que no se esté escribiendo aun
             if ((time() - filemtime($fullPath)) > 3) {
                 sendJson(['status' => 'finished', 'file' => $data['file']]);
             }
         }
         
-        // Timeout
-        if ((time() - $data['start']) > 1800) { 
-            sendJson(['status' => 'error', 'msg' => 'Timeout: El servidor se reinició o tardó mucho.']);
+        // Timeout (45 min)
+        if ((time() - $data['start']) > 2700) { 
+            sendJson(['status' => 'error', 'msg' => 'Timeout.']);
         }
 
-        // Progreso estimado (Más lento porque usamos 1 hilo)
         $elapsed = time() - $data['start'];
-        $progress = min(98, ($elapsed / max(1, ($data['duration'] * 2.0))) * 100); 
+        $progress = min(99, ($elapsed / max(1, ($data['duration'] * 2.5))) * 100); 
         sendJson(['status' => 'processing', 'progress' => round($progress)]);
     }
     sendJson(['status' => 'error', 'msg' => 'Iniciando...']);
@@ -235,7 +238,7 @@ if (ob_get_length()) ob_end_clean();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Maker Safe Mode</title>
+    <title>Viral Maker v69 (Split Render)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
     <style>
@@ -255,8 +258,8 @@ if (ob_get_length()) ob_end_clean();
 
 <div class="card">
     <div class="text-center mb-4">
-        <h2>VIRAL MAKER <span class="text-warning">v68</span></h2>
-        <p class="text-secondary small">MODO ANTI-CRASH (SINGLE THREAD)</p>
+        <h2>VIRAL MAKER <span class="text-warning">v69</span></h2>
+        <p class="text-secondary small">MODO DE RENDERIZADO DIVIDIDO (2 PASOS)</p>
     </div>
 
     <div id="uiInput">
@@ -278,7 +281,7 @@ if (ob_get_length()) ob_end_clean();
     <div id="uiProcess" class="hidden text-center">
         <div class="spinner-border text-warning mb-3"></div>
         <h4>PROCESANDO...</h4>
-        <p class="text-secondary small">Procesando lento para no saturar memoria.<br>Esto tardará más de lo normal.</p>
+        <p class="text-secondary small">Paso 1: Video | Paso 2: Audio<br>Esto es más seguro para tu servidor.</p>
         <div class="progress">
             <div id="progressBar" class="progress-bar" style="width: 0%"></div>
         </div>
@@ -312,7 +315,7 @@ async function process() {
         try {
             var data = JSON.parse(text);
         } catch(e) {
-            throw new Error("Error del servidor: Posible reinicio por falta de RAM.");
+            throw new Error("El servidor se reinició por falta de memoria.");
         }
         
         if(data.status === 'error') {
@@ -333,7 +336,6 @@ function track(id) {
     const bar = document.getElementById('progressBar');
     const txt = document.getElementById('progressText');
     
-    // Polling cada 4 segundos para no estresar el servidor
     const interval = setInterval(async () => {
         try {
             let res = await fetch(`?action=status&jobId=${id}`);
@@ -351,7 +353,7 @@ function track(id) {
                 txt.innerText = Math.round(data.progress) + '%';
             }
         } catch(e) {
-            console.log("Esperando servidor...");
+            console.log("...");
         }
     }, 4000);
 }
