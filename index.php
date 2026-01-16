@@ -1,521 +1,362 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v63.3 (GOLD MASTER PRO)
-// Versión Mejorada - Soporte videos hasta 5 minutos
-// - Audio en loop finito calculado para videos largos
-// - Optimizado para videos cortos (10s) y largos (5min)
-// - Log por job para progreso preciso
-// - Timeout extendido y chequeos adicionales
-// - Manejo mejorado de errores para siempre retornar JSON en actions
+// VIRAL REELS MAKER v67.0 (LOW RAM EDITION)
+// Optimizado para VPS pequeños / Containers (Easypanel)
 // ==========================================
 
-// Configuración
-@ini_set('display_errors', 0);
-@ini_set('upload_max_filesize', '2048M');
-@ini_set('post_max_size', '2048M');
-@ini_set('max_execution_time', 3600); // 60 minutos para videos largos y uploads
+// 1. CONFIGURACIÓN DE RECURSOS (MODO AHORRO)
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+// Bajamos el límite de memoria de PHP para evitar que el sistema mate el proceso.
+// La subida de archivos grandes NO requiere memory_limit alto (usa disco temporal).
+ini_set('memory_limit', '512M'); 
+ini_set('upload_max_filesize', '2048M');
+ini_set('post_max_size', '2048M');
+ini_set('max_execution_time', 0);
+set_time_limit(0);
+ignore_user_abort(true);
+
+// Buffer de salida para proteger el JSON
+ob_start();
 
 // Rutas
 $baseDir = __DIR__;
 $uploadDir = $baseDir . '/uploads';
 $processedDir = $baseDir . '/processed';
-$jobsDir = $baseDir . '/jobs';
-$logsDir = $baseDir . '/logs';
-$logoPath = $baseDir . '/logo.png';
-$fontPath = $baseDir . '/font.ttf';
+$jobsDir = $baseDir . '/jobs'; 
+$logoPath = $baseDir . '/logo.png'; 
+$fontPath = $baseDir . '/font.ttf'; 
 $audioPath = $baseDir . '/news.mp3';
+$logFile = $baseDir . '/ffmpeg_log.txt';
 
-// Carpetas
-foreach ([$uploadDir, $processedDir, $jobsDir, $logsDir] as $dir) {
-    if (!file_exists($dir)) mkdir($dir, 0777, true);
-}
+// Crear carpetas
+if (!file_exists($uploadDir)) @mkdir($uploadDir, 0777, true);
+if (!file_exists($processedDir)) @mkdir($processedDir, 0777, true);
+if (!file_exists($jobsDir)) @mkdir($jobsDir, 0777, true);
 
-// Limpieza Automática (Archivos viejos de más de 2 horas para videos largos)
-foreach ([$uploadDir, $processedDir, $jobsDir, $logsDir] as $dir) {
-    foreach (glob("$dir/*") as $file) {
-        if (is_file($file) && (time() - filemtime($file) > 7200)) @unlink($file);
+// Limpieza automática
+foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
+    if(is_dir($dir)){
+        foreach (glob("$dir/*") as $file) {
+            if (is_file($file) && (time() - filemtime($file) > 7200)) @unlink($file);
+        }
     }
 }
 
-$action = $_GET['action'] ?? '';
-
-// ==========================================
-// 1. DETECCIÓN
-// ==========================================
-$ffmpegPath = trim(shell_exec('which ffmpeg'));
-$status = [
-    'ffmpeg' => !empty($ffmpegPath),
-    'font' => file_exists($fontPath),
-    'audio' => file_exists($audioPath)
-];
-
-if ($status['ffmpeg']) {
-    $filters = shell_exec("$ffmpegPath -filters 2>&1");
-    $status['drawtext'] = (strpos($filters, 'drawtext') !== false);
-}
-
-// ==========================================
-// 2. BACKEND
-// ==========================================
-
-if (!empty($action)) {
-    // Para todas las actions, asegurar que no se muestre HTML
-    // Las actions conocidas manejarán sus headers y exits
-}
-
-// ---> DESCARGA
-if ($action === 'download' && isset($_GET['file'])) {
-    $file = basename($_GET['file']);
-    $filePath = "$processedDir/$file";
-    if (file_exists($filePath)) {
-        if (ob_get_level()) ob_end_clean();
-        header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="NOTICIA_VIRAL_'.date('Hi').'.mp4"');
-        header('Content-Length: ' . filesize($filePath));
-        readfile($filePath);
-        exit;
-    } else {
-        header('Content-Type: application/json');
-        echo json_encode(['status'=>'error', 'msg'=>'Archivo no encontrado']);
-        exit;
-    }
-}
-
-// ---> BORRADO MANUAL
-if ($action === 'delete_job' && isset($_GET['file'])) {
-    $file = basename($_GET['file']);
-    // Borrar el video final
-    if (file_exists("$processedDir/$file")) @unlink("$processedDir/$file");
-    
-    // Intentar borrar los archivos temporales asociados (por ID)
-    $jobId = explode('_', $file)[0]; // "v63_xxxx"
-    foreach (glob("$uploadDir/{$jobId}_*") as $f) @unlink($f);
-    foreach (glob("$jobsDir/{$jobId}*") as $f) @unlink($f);
-    foreach (glob("$logsDir/{$jobId}*") as $f) @unlink($f);
-    
-    header('Location: ?msg=deleted');
+// Función para enviar respuesta y cerrar
+function sendJson($data) {
+    if (ob_get_length()) ob_clean(); 
+    header('Content-Type: application/json');
+    echo json_encode($data);
     exit;
 }
 
-// ---> UPLOAD & PROCESS
+$action = $_GET['action'] ?? '';
+$ffmpegPath = trim(shell_exec('which ffmpeg'));
+$hasFfmpeg = !empty($ffmpegPath);
+
+// ==========================================
+// API: UPLOAD
+// ==========================================
 if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    header('Content-Type: application/json');
     
-    if (!$status['ffmpeg']) { 
-        echo json_encode(['status'=>'error', 'msg'=>'Error: FFmpeg no encontrado.']); 
-        exit; 
+    // Verificación de tamaño
+    if (empty($_FILES) && empty($_POST) && isset($_SERVER['CONTENT_LENGTH']) && $_SERVER['CONTENT_LENGTH'] > 0) {
+        sendJson(['status'=>'error', 'msg'=>'Archivo muy grande. Aumenta upload_max_filesize en PHP.ini']);
     }
 
-    $jobId = uniqid('v63_');
+    if (!$hasFfmpeg) sendJson(['status'=>'error', 'msg'=>'FFmpeg no instalado.']);
+
+    if (!isset($_FILES['videoFile']) || $_FILES['videoFile']['error'] !== UPLOAD_ERR_OK) {
+        sendJson(['status'=>'error', 'msg'=>'Error subiendo archivo. Código: ' . ($_FILES['videoFile']['error'] ?? 'N/A')]);
+    }
+
+    $jobId = uniqid('v67_');
     $ext = pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION);
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $outputFileName = "{$jobId}_viral.mp4"; 
     $outputFile = "$processedDir/$outputFileName";
     $jobFile = "$jobsDir/$jobId.json";
-    $logFile = "$logsDir/{$jobId}_log.txt";
 
     if (!move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile)) {
-        echo json_encode(['status'=>'error', 'msg'=>'Error al subir el video. Intenta de nuevo.']);
-        exit;
+        sendJson(['status'=>'error', 'msg'=>'Error al mover archivo temporal.']);
     }
     chmod($inputFile, 0777);
 
-    // Obtener duración del video para calcular repeticiones del audio
-    $durationCmd = escapeshellarg($ffmpegPath) . " -i " . escapeshellarg($inputFile) . " 2>&1 | grep Duration";
-    $durationOutput = shell_exec($durationCmd);
-    preg_match('/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/', $durationOutput, $matches);
-    $videoDuration = 0;
-    if (count($matches) >= 4) {
-        $videoDuration = ($matches[1] * 3600) + ($matches[2] * 60) + $matches[3];
+    // Duración
+    $durCmd = "$ffmpegPath -i " . escapeshellarg($inputFile) . " 2>&1 | grep Duration";
+    $durOut = shell_exec($durCmd);
+    preg_match('/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/', $durOut, $matches);
+    $seconds = 60;
+    if (!empty($matches)) {
+        $seconds = ($matches[1] * 3600) + ($matches[2] * 60) + $matches[3];
     }
 
-    if ($videoDuration <= 0) {
-        @unlink($inputFile);
-        echo json_encode(['status'=>'error', 'msg'=>'No se pudo obtener la duración del video. Verifica el archivo.']);
-        exit;
-    }
-
-    // DATOS
+    // Datos
     $useLogo = file_exists($logoPath);
     $useFont = file_exists($fontPath);
     $useAudio = file_exists($audioPath);
-    $useMirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
-    
-    // TEXTO (18 chars wrap, max 2 lines)
-    $rawTitle = mb_strtoupper($_POST['videoTitle'] ?? '');
-    $wrappedText = wordwrap($rawTitle, 18, "\n", true); 
-    $lines = explode("\n", $wrappedText);
-    
-    if(count($lines) > 2) { 
-        $lines = array_slice($lines, 0, 2); 
-        $lines[1] = substr($lines[1], 0, 15) . ".."; 
-    }
-    $count = count($lines);
+    $mirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
+    $title = mb_strtoupper($_POST['videoTitle'] ?? '');
 
-    // LAYOUT
-    $canvasW = 720;
-    $canvasH = 1280;
+    // COMANDO FFMPEG OPTIMIZADO PARA BAJA RAM
+    // -threads 1: Evita picos de CPU/RAM
+    // -max_muxing_queue_size 1024: Evita error "Too many packets buffered"
     
-    if ($count == 1) {
-        $fSize = 80; $startYs = [30]; $videoY = 135;
-    } else {
-        $fSize = 70; $startYs = [30, 110]; $videoY = 210;
-    }
+    $cmdIn = "-i " . escapeshellarg($inputFile);
+    if ($useLogo) $cmdIn .= " -i " . escapeshellarg($logoPath);
+    if ($useAudio) $cmdIn .= " -stream_loop -1 -i " . escapeshellarg($audioPath);
 
-    // INPUTS
-    $inputs = "-i " . escapeshellarg($inputFile);
-    if ($useLogo) $inputs .= " -i " . escapeshellarg($logoPath);
-    
-    // Calcular loops finitos para audio si es necesario
-    $loops = 0;
-    $audioDuration = 0;
-    if ($useAudio) {
-        $audioDurationCmd = escapeshellarg($ffmpegPath) . " -i " . escapeshellarg($audioPath) . " 2>&1 | grep Duration";
-        $audioOutput = shell_exec($audioDurationCmd);
-        preg_match('/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/', $audioOutput, $aMatches);
-        if (count($aMatches) >= 4) {
-            $audioDuration = ($aMatches[1] * 3600) + ($aMatches[2] * 60) + $aMatches[3];
-        }
-        if ($audioDuration > 0) {
-            $loops = ceil($videoDuration / $audioDuration) + 1; // +1 para safety
-            $inputs .= " -stream_loop $loops -i " . escapeshellarg($audioPath);
-        } else {
-            $useAudio = false; // Fallback si no se puede obtener duración de audio
+    // Filtros
+    $cw = 720; $ch = 1280;
+    $wrapped = wordwrap($title, 18, "\n", true);
+    $lines = explode("\n", $wrapped);
+    if(count($lines)>2) { $lines=array_slice($lines,0,2); $lines[1]=substr($lines[1],0,15).".."; }
+    $txtSize = (count($lines)==1) ? 80 : 70;
+    $txtY = (count($lines)==1) ? [30] : [30, 110];
+    $vidY = (count($lines)==1) ? 135 : 210;
+
+    $fc = "";
+    $hflip = $mirror ? ",hflip" : "";
+    $fc .= "color=c=#080808:s={$cw}x{$ch}:d=".($seconds+2)."[bg];";
+    $fc .= "[0:v]scale={$cw}:-1,setsar=1{$hflip},eq=saturation=1.15:contrast=1.05,setpts=0.98*PTS[vid];";
+    $fc .= "[bg][vid]overlay=0:{$vidY}:shortest=1[base];";
+    $last = "[base]";
+
+    if ($useFont && !empty($title)) {
+        $fFile = str_replace('\\','/', realpath($fontPath));
+        foreach($lines as $k => $l) {
+            $l = str_replace("'", "\\'", $l);
+            $y = $txtY[$k];
+            $fc .= "{$last}drawtext=fontfile='$fFile':text='$l':fontcolor=#FFD700:fontsize={$txtSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y={$y}[t{$k}];";
+            $last = "[t{$k}]";
         }
     }
 
-    $mirrorCmd = $useMirror ? ",hflip" : "";
-    
-    // FILTROS
-    $filter = "";
-    
-    // 1. LIENZO
-    $filter .= "color=c=#080808:s={$canvasW}x{$canvasH}:d=" . ceil($videoDuration) . "[bg];";
-    
-    // 2. VIDEO (SPEED + COLOR)
-    $filter .= "[0:v]scale={$canvasW}:-1,setsar=1{$mirrorCmd},eq=saturation=1.15:contrast=1.05,setpts=0.98*PTS[vid];";
-    $filter .= "[bg][vid]overlay=0:{$videoY}:shortest=1[base];";
-    $lastStream = "[base]";
-
-    // 3. TEXTO
-    if ($useFont && !empty($lines)) {
-        $fontSafe = str_replace('\\', '/', realpath($fontPath));
-        foreach ($lines as $i => $line) {
-            $y = $startYs[$i];
-            $lineSafe = str_replace("'", "\\'", $line);
-            $filter .= "{$lastStream}drawtext=fontfile='$fontSafe':text='$lineSafe':fontcolor=#FFD700:fontsize={$fSize}:borderw=4:bordercolor=black:shadowx=4:shadowy=4:x=(w-text_w)/2:y={$y}[v_text_{$i}];";
-            $lastStream = "[v_text_{$i}]";
-        }
-    }
-
-    // 4. LOGO
     if ($useLogo) {
-        $filter .= "[1:v]scale=-1:80[logo_s];";
-        $logoPosY = $canvasH - 120;
-        $filter .= "{$lastStream}[logo_s]overlay=30:{$logoPosY}[vfinal]";
-        $lastStream = "[vfinal]";
+        $fc .= "[1:v]scale=-1:80[lg];{$last}[lg]overlay=30:H-120[vfin]";
+        $last = "[vfin]";
     } else {
-        $filter .= "{$lastStream}copy[vfinal]";
+        $fc .= "{$last}copy[vfin]";
     }
 
-    // 5. AUDIO - MEJORADO PARA VIDEOS LARGOS CON LOOPS FINITOS
     if ($useAudio) {
-        $mIdx = $useLogo ? "2" : "1";
-        
-        // Procesar audio original del video (voz)
-        $filter .= ";[0:a]atempo=1.02,volume=1.0[voice];";
-        
-        // Audio de fondo (BGM) - loops finitos ya aplicados en input
-        $filter .= "[{$mIdx}:a]volume=0.15[bgm];";
-        
-        // Mezclar ambos audios - duration=first toma la duración del primer input (voice)
-        $filter .= "[voice][bgm]amix=inputs=2:duration=first:dropout_transition=0[afinal]";
+        $idx = $useLogo ? 2 : 1;
+        $fc .= ";[0:a]volume=1.0[v];[{$idx}:a]volume=0.15[m];[v][m]amix=inputs=2:duration=first[afin]";
     } else {
-        // Solo audio del video original
-        $filter .= ";[0:a]atempo=1.02,volume=1.0[afinal]";
+        $fc .= ";[0:a]volume=1.0[afin]";
     }
-
-    // COMANDO FFMPEG OPTIMIZADO
-    $cmd = "nice -n 10 " . escapeshellarg($ffmpegPath) . " -y $inputs " .
-           "-filter_complex \"$filter\" " .
-           "-map \"[vfinal]\" -map \"[afinal]\" " .
-           "-c:v libx264 -preset ultrafast -threads 4 -crf 26 " .
-           "-pix_fmt yuv420p " .
-           "-c:a aac -b:a 128k -ar 44100 " .
-           "-movflags +faststart " .
-           "-shortest " .  // IMPORTANTE: Detiene cuando el stream más corto termina
-           escapeshellarg($outputFile) . " >> " . escapeshellarg($logFile) . " 2>&1 &";
-
-    exec($cmd);
 
     file_put_contents($jobFile, json_encode([
-        'status' => 'processing', 
-        'file' => $outputFileName, 
+        'status' => 'processing',
+        'file' => $outputFileName,
         'start' => time(),
-        'duration' => $videoDuration
+        'duration' => $seconds
     ]));
+
+    // EJECUCIÓN CON BAJA PRIORIDAD Y 1 HILO
+    $finalCmd = "nohup $ffmpegPath -y $cmdIn -filter_complex \"$fc\" -map \"[vfin]\" -map \"[afin]\" -c:v libx264 -preset superfast -threads 1 -max_muxing_queue_size 1024 -crf 28 -c:a aac -b:a 128k -movflags +faststart -shortest " . escapeshellarg($outputFile) . " > $logFile 2>&1 &";
     
-    echo json_encode(['status' => 'success', 'jobId' => $jobId]);
-    exit;
+    exec($finalCmd);
+
+    sendJson(['status' => 'success', 'jobId' => $jobId]);
 }
 
-// ---> VERIFICAR ESTADO
+// ==========================================
+// API: STATUS
+// ==========================================
 if ($action === 'status') {
-    header('Content-Type: application/json');
     $id = preg_replace('/[^a-z0-9_]/', '', $_GET['jobId'] ?? '');
     $jFile = "$jobsDir/$id.json";
-    $logFile = "$logsDir/{$id}_log.txt";
-    
+
     if (file_exists($jFile)) {
         $data = json_decode(file_get_contents($jFile), true);
-        if (!is_array($data) || !isset($data['file'])) {
-            echo json_encode(['status' => 'error', 'msg' => 'Job inválido o corrupto']);
-            exit;
+        $fullPath = "$processedDir/" . ($data['file'] ?? '');
+
+        // Verificar éxito
+        if (!empty($data['file']) && file_exists($fullPath) && filesize($fullPath) > 50000) {
+            if ((time() - filemtime($fullPath)) > 2) {
+                sendJson(['status' => 'finished', 'file' => $data['file']]);
+            }
         }
-        $fullPath = "$processedDir/" . $data['file'];
         
-        if (file_exists($fullPath) && filesize($fullPath) > 50000) {
-            chmod($fullPath, 0777);
-            echo json_encode(['status' => 'finished', 'file' => $data['file']]);
-        } elseif (time() - $data['start'] > 3600) { // 60 minutos timeout para videos largos
-            echo json_encode(['status' => 'error', 'msg' => 'Timeout - Video muy largo o error en procesamiento']);
-        } else {
-            // Calcular progreso preciso desde log
-            $progress = 0;
-            if (file_exists($logFile)) {
-                $logContent = file_get_contents($logFile);
-                $lines = explode("\n", $logContent);
-                $lastLines = array_slice($lines, -20); // Últimas 20 líneas para más contexto
-                $time = 0;
-                foreach ($lastLines as $line) {
-                    if (preg_match('/time=([\d:.]+)/', $line, $m)) {
-                        $timeStr = $m[1];
-                        $parts = explode(':', $timeStr);
-                        if (count($parts) === 3) {
-                            $time = ($parts[0] * 3600) + ($parts[1] * 60) + (float)$parts[2];
-                        }
-                    }
-                }
-                if ($data['duration'] > 0 && $time > 0) {
-                    $progress = min(95, ($time / $data['duration']) * 100);
-                }
-            }
-            
-            // Fallback a progreso aproximado si no hay log preciso
-            if ($progress === 0) {
-                $elapsed = time() - $data['start'];
-                $progress = min(95, ($elapsed / max(1, $data['duration'] ?? 60)) * 100);
-            }
-            
-            echo json_encode(['status' => 'processing', 'progress' => round($progress)]);
+        // Timeout (Si tarda mas de 30 mins)
+        if ((time() - $data['start']) > 1800) {
+            sendJson(['status' => 'error', 'msg' => 'Timeout: El servidor tardó demasiado o se reinició.']);
         }
-    } else { 
-        echo json_encode(['status' => 'error', 'msg' => 'Job no encontrado']); 
+
+        // Progreso estimado
+        $elapsed = time() - $data['start'];
+        $progress = min(98, ($elapsed / max(1, ($data['duration'] * 1.5))) * 100); // 1.5 factor (más lento por threads 1)
+        sendJson(['status' => 'processing', 'progress' => round($progress)]);
     }
+    sendJson(['status' => 'error', 'msg' => 'Esperando...']);
+}
+
+// ==========================================
+// UTILS
+// ==========================================
+if ($action === 'download' && isset($_GET['file'])) {
+    $f = basename($_GET['file']);
+    $p = "$processedDir/$f";
+    if (file_exists($p)) {
+        if (ob_get_length()) ob_clean();
+        header('Content-Type: video/mp4');
+        header('Content-Disposition: attachment; filename="VIDEO_'.date('md_Hi').'.mp4"');
+        header('Content-Length: '.filesize($p));
+        readfile($p);
+        exit;
+    }
+}
+
+if ($action === 'delete_job' && isset($_GET['file'])) {
+    $f = basename($_GET['file']);
+    @unlink("$processedDir/$f");
+    $jid = explode('_', $f)[0];
+    foreach(glob("$uploadDir/{$jid}*") as $tmp) @unlink($tmp);
+    foreach(glob("$jobsDir/{$jid}*") as $tmp) @unlink($tmp);
+    header('Location: ?deleted');
     exit;
 }
 
-// Si llega aquí con action set, es acción desconocida
-if (!empty($action)) {
-    header('Content-Type: application/json');
-    echo json_encode(['status' => 'error', 'msg' => 'Acción no reconocida']);
-    exit;
-}
+if (ob_get_length()) ob_end_clean();
 ?>
-
 <!DOCTYPE html>
 <html lang="es" data-bs-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Maker Gold Pro</title>
+    <title>Viral Maker Low-Ram</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <style>
-        body { background: #000; color: #fff; padding: 15px; font-family: sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
-        .card { background: #111; border: 1px solid #333; max-width: 480px; width: 100%; padding: 25px; border-radius: 25px; box-shadow: 0 0 50px rgba(255, 215, 0, 0.1); }
-        h2 { font-family: 'Anton', sans-serif; letter-spacing: 1px; color: #fff; }
-        
-        .form-control { background: #000 !important; color: #FFD700 !important; border: 2px solid #333; font-weight: bold; text-align: center; border-radius: 12px; }
-        .form-control:focus { border-color: #FFD700; box-shadow: 0 0 15px rgba(255,215,0,0.2); }
-        
-        #tIn { font-family: 'Anton', sans-serif; font-size: 1.4rem; text-transform: uppercase; }
-        .char-counter { font-size: 0.8rem; color: #666; text-align: right; margin-top: 5px; font-weight: bold; }
-        
-        .btn-go { width: 100%; padding: 18px; background: linear-gradient(135deg, #FFD700, #FFA500); color: #000; font-family: 'Anton'; font-size: 1.4rem; border: none; border-radius: 12px; cursor: pointer; transition: 0.2s; }
-        .btn-go:hover { transform: scale(1.02); background: #fff; }
-        .btn-go:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        .btn-clean { background: #333; color: #aaa; border: 1px solid #444; width: 100%; padding: 12px; border-radius: 12px; font-weight: bold; transition: 0.2s; }
-        .btn-clean:hover { background: #f00; color: #fff; border-color: #f00; }
-        
+        body { background: #050505; color: #fff; font-family: sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .card { background: #121212; border: 1px solid #333; max-width: 500px; width: 100%; padding: 30px; border-radius: 20px; box-shadow: 0 0 60px rgba(255, 215, 0, 0.05); }
+        h2 { font-family: 'Anton', sans-serif; letter-spacing: 1px; }
+        .form-control { background: #000 !important; color: #FFD700 !important; border: 1px solid #333; text-align: center; border-radius: 10px; padding: 15px; }
+        .form-control:focus { border-color: #FFD700; box-shadow: none; }
+        .btn-go { width: 100%; padding: 15px; background: #FFD700; color: #000; font-family: 'Anton'; font-size: 1.5rem; border: none; border-radius: 10px; margin-top: 15px; }
         .hidden { display: none; }
-        #videoContainer { width: 100%; aspect-ratio: 9/16; background: #000; margin-top: 20px; border-radius: 12px; overflow: hidden; border: 1px solid #333; }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        
-        .progress { height: 8px; background: #222; border-radius: 10px; overflow: hidden; }
-        .progress-bar { background: linear-gradient(90deg, #FFD700, #FFA500); transition: width 0.3s; }
-        
-        .alert-info { background: #1a3a4a; border-color: #2a5a7a; color: #6fc3df; }
+        video { width: 100%; border-radius: 10px; margin-top: 20px; border: 1px solid #333; }
+        .progress { height: 6px; background: #222; margin-top: 20px; }
+        .progress-bar { background: #FFD700; }
     </style>
 </head>
 <body>
 
 <div class="card">
     <div class="text-center mb-4">
-        <h2>VIRAL MAKER <span class="text-warning">PRO v63.3</span></h2>
-        <p class="text-muted small m-0">SOPORTE HASTA 5 MINUTOS</p>
+        <h2>VIRAL MAKER <span class="text-warning">v67</span></h2>
+        <p class="text-secondary small">OPTIMIZADO PARA SERVIDORES PEQUEÑOS</p>
     </div>
 
-    <?php if ($status['ffmpeg']): ?>
-        <div id="uiInput">
-            <div class="alert alert-info small mb-3">
-                ℹ️ Soporta videos de 10 segundos hasta 5 minutos. El audio se repetirá automáticamente.
+    <div id="uiInput">
+        <?php if(!$hasFfmpeg): ?>
+            <div class="alert alert-danger">⚠️ FFMPEG NO INSTALADO</div>
+        <?php else: ?>
+            <input type="text" id="tIn" class="form-control mb-3" placeholder="TITULAR CORTO (OPCIONAL)" maxlength="36">
+            <input type="file" id="fIn" class="form-control mb-3" accept="video/*">
+            
+            <div class="form-check form-switch d-flex justify-content-center gap-2">
+                <input class="form-check-input" type="checkbox" id="mirrorCheck">
+                <label class="form-check-label text-secondary">Modo Espejo</label>
             </div>
-            
-            <div class="mb-3">
-                <input type="text" id="tIn" class="form-control py-3" placeholder="TITULAR IMPACTANTE" maxlength="36" autocomplete="off">
-                <div id="charCount" class="char-counter">0 / 36</div>
-            </div>
-            
-            <input type="file" id="fIn" class="form-control mb-4" accept="video/*" style="font-family: sans-serif; font-size: 0.9rem; padding: 10px;">
-            
-            <div class="d-flex justify-content-center gap-3 mb-4">
-                <div class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" id="mirrorCheck">
-                    <label class="text-secondary small fw-bold">Modo Espejo</label>
-                </div>
-            </div>
-            
-            <button class="btn-go" onclick="process()">⚡ CREAR VIDEO ⚡</button>
-        </div>
-    <?php else: ?>
-        <div class="alert alert-danger text-center fw-bold">⚠️ FFMPEG NO DETECTADO</div>
-    <?php endif; ?>
 
-    <div id="uiProcess" class="hidden text-center py-4">
-        <div class="spinner-border text-warning mb-4" style="width: 4rem; height: 4rem;"></div>
-        <h3 class="text-white" style="font-family: 'Anton'">RENDERIZANDO...</h3>
-        <p class="text-success small mb-3">Aplicando Evasión Pro + Titular + Audio Loop...</p>
+            <button class="btn-go" onclick="process()">RENDERIZAR</button>
+        <?php endif; ?>
+    </div>
+
+    <div id="uiProcess" class="hidden text-center">
+        <div class="spinner-border text-warning mb-3"></div>
+        <h4>PROCESANDO...</h4>
+        <p class="text-secondary small">Procesando con 1 hilo para estabilidad.<br>Por favor espera.</p>
         <div class="progress">
             <div id="progressBar" class="progress-bar" style="width: 0%"></div>
         </div>
-        <p class="text-muted small mt-2"><span id="progressText">0</span>% completado</p>
+        <div id="progressText" class="small text-muted mt-2">0%</div>
     </div>
 
-    <div id="uiResult" class="hidden text-center mt-3">
+    <div id="uiResult" class="hidden text-center">
         <div id="videoContainer"></div>
-        <a id="dlLink" href="#" class="btn btn-warning w-100 mt-3 fw-bold py-3" style="font-family: 'Anton'; font-size: 1.2rem;">⬇️ DESCARGAR VIDEO</a>
-        
-        <div class="row mt-3 g-2">
-            <div class="col-6">
-                 <button onclick="cleanAndNew()" class="btn-clean">🗑️ Borrar y Nuevo</button>
-            </div>
-            <div class="col-6">
-                 <button onclick="location.reload()" class="btn-clean">🔄 Solo Nuevo</button>
-            </div>
-        </div>
-        <p class="text-muted small mt-2">"Borrar y Nuevo" libera espacio en el servidor.</p>
+        <a id="dlLink" class="btn btn-success w-100 mt-3 py-3 fw-bold">DESCARGAR</a>
+        <button onclick="location.reload()" class="btn btn-outline-secondary w-100 mt-2">NUEVO VIDEO</button>
     </div>
 </div>
 
 <script>
-let currentFile = '';
-
-const tIn = document.getElementById('tIn');
-const counter = document.getElementById('charCount');
-
-if(tIn) {
-    tIn.addEventListener('input', function() {
-        this.value = this.value.toUpperCase();
-        counter.innerText = `${this.value.length} / 36`;
-    });
-}
-
 async function process() {
-    const fIn = document.getElementById('fIn').files[0];
-    if(!fIn) return alert("¡Falta el video!");
-    
-    // Validar tamaño (máximo 500MB)
-    if(fIn.size > 500 * 1024 * 1024) {
-        return alert("⚠️ El video es muy grande. Máximo 500MB.");
-    }
-    
+    const file = document.getElementById('fIn').files[0];
+    if(!file) return alert("Selecciona un video");
+
     document.getElementById('uiInput').classList.add('hidden');
     document.getElementById('uiProcess').classList.remove('hidden');
 
     const fd = new FormData();
-    fd.append('videoTitle', tIn.value);
-    fd.append('videoFile', fIn);
+    fd.append('videoFile', file);
+    fd.append('videoTitle', document.getElementById('tIn').value);
     fd.append('mirrorMode', document.getElementById('mirrorCheck').checked);
 
     try {
-        const res = await fetch('?action=upload', {method:'POST', body:fd});
-        if (!res.ok) {
-            throw new Error(`HTTP error! status: ${res.status}`);
+        let res = await fetch('?action=upload', { method: 'POST', body: fd });
+        let text = await res.text();
+        
+        try {
+            var data = JSON.parse(text);
+        } catch(e) {
+            console.error("Respuesta del servidor:", text);
+            throw new Error("El servidor devolvió un error (HTML) en lugar de JSON. Probablemente se quedó sin memoria.");
         }
-        const data = await res.json();
-        if(data.status === 'success') {
-            track(data.jobId);
-        } else { 
-            alert("Error: " + data.msg); 
-            location.reload(); 
+        
+        if(data.status === 'error') {
+            alert(data.msg);
+            location.reload();
+            return;
         }
-    } catch(e) { 
-        alert("Error de conexión: " + e.message); 
-        location.reload(); 
+
+        track(data.jobId);
+
+    } catch(e) {
+        alert("Error crítico: " + e.message);
+        location.reload();
     }
 }
 
 function track(id) {
-    const progressBar = document.getElementById('progressBar');
-    const progressText = document.getElementById('progressText');
+    const bar = document.getElementById('progressBar');
+    const txt = document.getElementById('progressText');
     
-    const i = setInterval(async () => {
+    const interval = setInterval(async () => {
         try {
-            const res = await fetch(`?action=status&jobId=${id}`);
-            if (!res.ok) {
-                throw new Error(`HTTP error! status: ${res.status}`);
-            }
-            const data = await res.json();
-            
+            let res = await fetch(`?action=status&jobId=${id}`);
+            let data = await res.json();
+
             if(data.status === 'finished') {
-                clearInterval(i);
-                currentFile = data.file;
-                document.getElementById('uiProcess').classList.add('hidden');
-                document.getElementById('uiResult').classList.remove('hidden');
-                document.getElementById('dlLink').href = '?action=download&file=' + data.file;
-                document.getElementById('videoContainer').innerHTML = 
-                    `<video src="processed/${data.file}?t=${Date.now()}" controls autoplay muted loop class="w-100 h-100"></video>`;
+                clearInterval(interval);
+                showResult(data.file);
             } else if(data.status === 'error') {
-                clearInterval(i);
-                alert("❌ Error: " + (data.msg || 'Error desconocido')); 
+                clearInterval(interval);
+                alert(data.msg);
                 location.reload();
-            } else if(data.status === 'processing') {
-                // Actualizar barra de progreso
-                if(data.progress) {
-                    progressBar.style.width = data.progress + '%';
-                    progressText.textContent = data.progress;
-                }
+            } else {
+                bar.style.width = data.progress + '%';
+                txt.innerText = Math.round(data.progress) + '%';
             }
         } catch(e) {
-            clearInterval(i);
-            alert("Error en status: " + e.message);
-            location.reload();
+            console.log("Reconectando...");
         }
-    }, 2000);
+    }, 3000); // Polling más lento para no saturar
 }
 
-function cleanAndNew() {
-    if(currentFile) {
-        if(confirm('¿Borrar el video del servidor y crear uno nuevo?')) {
-            window.location.href = '?action=delete_job&file=' + currentFile;
-        }
-    } else {
-        location.reload();
-    }
+function showResult(file) {
+    document.getElementById('uiProcess').classList.add('hidden');
+    document.getElementById('uiResult').classList.remove('hidden');
+    
+    const url = `processed/${file}`;
+    document.getElementById('videoContainer').innerHTML = 
+        `<video src="${url}" controls autoplay loop></video>`;
+    document.getElementById('dlLink').href = `?action=download&file=${file}`;
 }
 </script>
+
 </body>
 </html>
