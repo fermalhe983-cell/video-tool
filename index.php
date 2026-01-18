@@ -1,7 +1,7 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v76.0 - ANTI-FINGERPRINT + VIDEOS LARGOS
-// Sin emojis (PHP GD no los soporta bien)
+// VIRAL REELS MAKER v75.0 - EMOJIS + VIDEOS LARGOS + ANTI-FINGERPRINT
+// Solución: Emojis renderizados con PHP GD, videos en chunks
 // ==========================================
 
 error_reporting(E_ALL);
@@ -52,59 +52,43 @@ function logMsg($msg) {
     file_put_contents($logFile, "[$time] $msg\n", FILE_APPEND);
 }
 
-// Limpiar texto: quitar emojis y caracteres especiales
-function cleanTitle($text) {
-    // Convertir a mayúsculas
-    $text = mb_strtoupper($text, 'UTF-8');
-    
-    // Quitar emojis y caracteres especiales unicode
-    $text = preg_replace('/[\x{1F600}-\x{1F64F}]/u', '', $text); // Emoticons
-    $text = preg_replace('/[\x{1F300}-\x{1F5FF}]/u', '', $text); // Misc Symbols
-    $text = preg_replace('/[\x{1F680}-\x{1F6FF}]/u', '', $text); // Transport
-    $text = preg_replace('/[\x{1F1E0}-\x{1F1FF}]/u', '', $text); // Flags
-    $text = preg_replace('/[\x{2600}-\x{26FF}]/u', '', $text);   // Misc symbols
-    $text = preg_replace('/[\x{2700}-\x{27BF}]/u', '', $text);   // Dingbats
-    $text = preg_replace('/[\x{FE00}-\x{FE0F}]/u', '', $text);   // Variation
-    $text = preg_replace('/[\x{1F900}-\x{1F9FF}]/u', '', $text); // Supplemental
-    $text = preg_replace('/[\x{1FA00}-\x{1FA6F}]/u', '', $text); // Chess
-    $text = preg_replace('/[\x{1FA70}-\x{1FAFF}]/u', '', $text); // Symbols
-    $text = preg_replace('/[\x{200D}]/u', '', $text);            // Zero width joiner
-    
-    // Solo permitir letras, números, espacios y puntuación básica
-    $text = preg_replace('/[^\p{L}\p{N}\s\-\.\!\?\,]/u', '', $text);
-    
-    // Limpiar espacios múltiples
-    $text = preg_replace('/\s+/', ' ', trim($text));
-    
+function escapeFFmpegText($text) {
+    $text = str_replace("\\", "\\\\\\\\", $text);
+    $text = str_replace("'", "\\'", $text);
+    $text = str_replace(":", "\\:", $text);
+    $text = str_replace("[", "\\[", $text);
+    $text = str_replace("]", "\\]", $text);
+    $text = str_replace("%", "\\%", $text);
+    $text = str_replace('"', '\\"', $text);
     return $text;
 }
 
-// Generar imagen PNG con título usando GD
+// Generar imagen PNG con título y emojis usando GD
 function createTitleImage($title, $fontPath, $outputPath, $width = 720) {
-    $fontSize = 54;
-    $maxWidth = $width - 80;
-    $lineHeight = 72;
-    $paddingTop = 35;
-    $paddingBottom = 25;
+    // Configuración
+    $fontSize = 52;
+    $maxWidth = $width - 60;
+    $lineHeight = 70;
+    $paddingTop = 30;
+    $paddingBottom = 30;
+    $textColor = [255, 215, 0]; // Dorado
+    $borderColor = [0, 0, 0]; // Negro
+    $borderSize = 4;
     
-    // Limpiar título
-    $title = cleanTitle($title);
-    
-    if (empty($title)) {
-        $title = "VIDEO VIRAL";
-    }
+    // Convertir a mayúsculas
+    $title = mb_strtoupper($title, 'UTF-8');
     
     // Dividir en líneas
     $words = preg_split('/\s+/u', $title);
     $lines = [];
     $currentLine = '';
     
+    // Crear imagen temporal para medir texto
     $tempImg = imagecreatetruecolor(1, 1);
     
     foreach ($words as $word) {
         $testLine = $currentLine ? "$currentLine $word" : $word;
-        $bbox = @imagettfbbox($fontSize, 0, $fontPath, $testLine);
-        if ($bbox === false) continue;
+        $bbox = imagettfbbox($fontSize, 0, $fontPath, $testLine);
         $testWidth = abs($bbox[2] - $bbox[0]);
         
         if ($testWidth <= $maxWidth) {
@@ -116,84 +100,72 @@ function createTitleImage($title, $fontPath, $outputPath, $width = 720) {
     }
     if ($currentLine) $lines[] = $currentLine;
     
-    imagedestroy($tempImg);
-    
     // Máximo 2 líneas
     if (count($lines) > 2) {
         $lines = array_slice($lines, 0, 2);
-        if (mb_strlen($lines[1], 'UTF-8') > 16) {
-            $lines[1] = mb_substr($lines[1], 0, 14, 'UTF-8') . '..';
+        // Truncar segunda línea si es muy larga
+        $bbox = imagettfbbox($fontSize, 0, $fontPath, $lines[1]);
+        while (abs($bbox[2] - $bbox[0]) > $maxWidth && mb_strlen($lines[1]) > 5) {
+            $lines[1] = mb_substr($lines[1], 0, -1);
+            $bbox = imagettfbbox($fontSize, 0, $fontPath, $lines[1] . '..');
         }
+        $lines[1] .= '..';
     }
     
-    if (empty($lines)) {
-        $lines = ["VIDEO VIRAL"];
-    }
+    imagedestroy($tempImg);
     
-    // Calcular altura
+    // Calcular altura total
     $totalHeight = $paddingTop + (count($lines) * $lineHeight) + $paddingBottom;
     
-    // Crear imagen con fondo transparente
+    // Crear imagen final con fondo transparente
     $img = imagecreatetruecolor($width, $totalHeight);
     imagesavealpha($img, true);
-    imagealphablending($img, false);
     $transparent = imagecolorallocatealpha($img, 0, 0, 0, 127);
     imagefill($img, 0, 0, $transparent);
-    imagealphablending($img, true);
     
     // Colores
-    $gold = imagecolorallocate($img, 255, 215, 0);
-    $black = imagecolorallocate($img, 0, 0, 0);
-    $darkGold = imagecolorallocate($img, 180, 150, 0);
+    $gold = imagecolorallocate($img, $textColor[0], $textColor[1], $textColor[2]);
+    $black = imagecolorallocate($img, $borderColor[0], $borderColor[1], $borderColor[2]);
     
-    // Dibujar cada línea
+    // Dibujar cada línea centrada con borde
     $y = $paddingTop + $fontSize;
     foreach ($lines as $line) {
-        $bbox = @imagettfbbox($fontSize, 0, $fontPath, $line);
-        if ($bbox === false) continue;
-        
+        $bbox = imagettfbbox($fontSize, 0, $fontPath, $line);
         $textWidth = abs($bbox[2] - $bbox[0]);
         $x = ($width - $textWidth) / 2;
         
-        // Sombra
-        for ($sx = 3; $sx <= 5; $sx++) {
-            for ($sy = 3; $sy <= 5; $sy++) {
-                @imagettftext($img, $fontSize, 0, $x + $sx, $y + $sy, $black, $fontPath, $line);
-            }
-        }
-        
-        // Borde negro grueso
-        for ($bx = -3; $bx <= 3; $bx++) {
-            for ($by = -3; $by <= 3; $by++) {
-                if ($bx != 0 || $by != 0) {
-                    @imagettftext($img, $fontSize, 0, $x + $bx, $y + $by, $black, $fontPath, $line);
+        // Borde (dibujar texto en negro alrededor)
+        for ($ox = -$borderSize; $ox <= $borderSize; $ox++) {
+            for ($oy = -$borderSize; $oy <= $borderSize; $oy++) {
+                if ($ox != 0 || $oy != 0) {
+                    imagettftext($img, $fontSize, 0, $x + $ox, $y + $oy, $black, $fontPath, $line);
                 }
             }
         }
         
-        // Texto dorado
-        @imagettftext($img, $fontSize, 0, $x, $y, $gold, $fontPath, $line);
+        // Texto principal en dorado
+        imagettftext($img, $fontSize, 0, $x, $y, $gold, $fontPath, $line);
         
         $y += $lineHeight;
     }
     
     // Guardar PNG
-    imagepng($img, $outputPath, 9);
+    imagepng($img, $outputPath);
     imagedestroy($img);
     
     return $totalHeight;
 }
 
-// Anti-fingerprint
+// Anti-fingerprint: valores aleatorios
 function getAntiFingerprint() {
     return [
-        'speed' => round(0.98 + (mt_rand(0, 40) / 1000), 3),
-        'saturation' => round(1.05 + (mt_rand(0, 120) / 1000), 3),
-        'contrast' => round(1.02 + (mt_rand(0, 60) / 1000), 3),
-        'brightness' => round((mt_rand(-15, 15) / 1000), 3),
-        'hue' => mt_rand(-4, 4),
-        'gamma' => round(0.97 + (mt_rand(0, 60) / 1000), 3),
-        'noise' => mt_rand(1, 2),
+        'speed' => round(0.98 + (mt_rand(0, 40) / 1000), 3),       // 0.980 - 1.020
+        'saturation' => round(1.05 + (mt_rand(0, 120) / 1000), 3), // 1.05 - 1.17
+        'contrast' => round(1.02 + (mt_rand(0, 60) / 1000), 3),    // 1.02 - 1.08
+        'brightness' => round((mt_rand(-15, 15) / 1000), 3),       // -0.015 - 0.015
+        'hue' => mt_rand(-4, 4),                                    // -4 - 4 grados
+        'gamma' => round(0.97 + (mt_rand(0, 60) / 1000), 3),       // 0.97 - 1.03
+        'noise' => mt_rand(1, 2),                                   // 1 - 2
     ];
 }
 
@@ -218,7 +190,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if (empty($_FILES['videoFile']['tmp_name'])) {
         if (isset($_SERVER['CONTENT_LENGTH']) && $_SERVER['CONTENT_LENGTH'] > 0) {
-            sendJson(['status' => 'error', 'msg' => 'Archivo muy grande.']);
+            sendJson(['status' => 'error', 'msg' => 'Archivo muy grande para PHP.']);
         }
         sendJson(['status' => 'error', 'msg' => 'No se recibió archivo.']);
     }
@@ -234,15 +206,11 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         sendJson(['status' => 'error', 'msg' => 'El título es obligatorio.']);
     }
     
-    // Limpiar y limitar título
-    $title = cleanTitle($title);
+    // Limitar título a 36 caracteres
     $title = mb_substr($title, 0, 36, 'UTF-8');
-    
-    if (empty($title)) {
-        $title = "VIDEO VIRAL";
-    }
 
-    $jobId = 'v76_' . time() . '_' . mt_rand(1000, 9999);
+    $jobId = uniqid('v75_', true);
+    $jobId = preg_replace('/[^a-zA-Z0-9_]/', '', $jobId);
     
     $ext = strtolower(pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION));
     if (!in_array($ext, ['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', '3gp'])) {
@@ -251,6 +219,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     
     $inputFile = "$uploadDir/{$jobId}_input.$ext";
     $titleImgFile = "$assetsDir/{$jobId}_title.png";
+    $tempVideo = "$uploadDir/{$jobId}_temp.mp4";
     $outputFileName = "{$jobId}_viral.mp4";
     $outputFile = "$processedDir/$outputFileName";
     $jobFile = "$jobsDir/{$jobId}.json";
@@ -268,12 +237,14 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $hasVideoAudio = false;
     
     if (!empty($ffprobePath)) {
+        // Duración
         $cmd = "$ffprobePath -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " . escapeshellarg($inputFile) . " 2>/dev/null";
         $duration = trim(shell_exec($cmd));
         if (is_numeric($duration) && $duration > 0) {
             $seconds = floatval($duration);
         }
         
+        // Dimensiones
         $cmd = "$ffprobePath -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 " . escapeshellarg($inputFile) . " 2>/dev/null";
         $dims = trim(shell_exec($cmd));
         if (preg_match('/(\d+)x(\d+)/', $dims, $m)) {
@@ -281,6 +252,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $videoHeight = intval($m[2]);
         }
         
+        // Verificar si tiene audio
         $cmd = "$ffprobePath -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 " . escapeshellarg($inputFile) . " 2>/dev/null";
         $audioCheck = trim(shell_exec($cmd));
         $hasVideoAudio = !empty($audioCheck);
@@ -288,110 +260,156 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     
     if ($seconds < 1) $seconds = 60;
     
+    // Límite 5 minutos
     if ($seconds > 300) {
         @unlink($inputFile);
-        sendJson(['status' => 'error', 'msg' => 'Video excede 5 minutos.']);
+        sendJson(['status' => 'error', 'msg' => 'El video excede 5 minutos (máximo permitido).']);
     }
 
     $mirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     
-    // Crear imagen del título
+    // Crear imagen del título con emojis
     $titleHeight = createTitleImage($title, $fontPath, $titleImgFile, 720);
     
     if (!file_exists($titleImgFile)) {
         @unlink($inputFile);
-        sendJson(['status' => 'error', 'msg' => 'Error creando título.']);
+        sendJson(['status' => 'error', 'msg' => 'Error al crear imagen del título.']);
     }
 
     // Anti-fingerprint
     $af = getAntiFingerprint();
     
-    $vidY = $titleHeight + 15;
+    // Posición del video (debajo del título)
+    $vidY = $titleHeight + 10;
+    
+    // Canvas
     $cw = 720;
     $ch = 1280;
     
+    // Calcular atempo para compensar velocidad
     $atempo = round(1 / $af['speed'], 4);
     
-    logMsg("=== JOB: $jobId ===");
+    logMsg("=== NUEVO JOB: $jobId ===");
     logMsg("Video: {$seconds}s, {$videoWidth}x{$videoHeight}, audio: " . ($hasVideoAudio ? 'SI' : 'NO'));
-    logMsg("Titulo: $title");
-    logMsg("AF: spd={$af['speed']} sat={$af['saturation']} con={$af['contrast']} hue={$af['hue']}");
+    logMsg("Anti-FP: spd={$af['speed']} sat={$af['saturation']} con={$af['contrast']} hue={$af['hue']}");
 
-    // Filtros
+    // ---------------------------------------------------------
+    // CONSTRUIR COMANDO FFMPEG
+    // Estrategia: Un solo comando con -filter_complex
+    // Para videos largos: usar -threads 1 y preset más lento
+    // ---------------------------------------------------------
+    
     $hflip = $mirror ? ",hflip" : "";
+    
+    // Determinar preset según duración
     $preset = ($seconds > 120) ? 'faster' : 'fast';
     $threads = ($seconds > 120) ? 1 : 2;
     
-    // Filtro de video
+    // Construir filtro de video
     $vf = "";
-    $vf .= "color=c=#0a0a0a:s={$cw}x{$ch}:d=" . ceil($seconds + 2) . "[bg];";
-    $vf .= "[0:v]scale={$cw}:-2:flags=bilinear,setsar=1{$hflip},";
+    // Fondo negro
+    $vf .= "color=c=#0a0a0a:s={$cw}x{$ch}:d=" . ceil($seconds + 1) . "[bg];";
+    
+    // Procesar video con anti-fingerprint
+    $vf .= "[0:v]";
+    $vf .= "scale={$cw}:-2:flags=bilinear,";
+    $vf .= "setsar=1{$hflip},";
     $vf .= "setpts=" . round(1/$af['speed'], 4) . "*PTS,";
     $vf .= "eq=saturation={$af['saturation']}:contrast={$af['contrast']}:brightness={$af['brightness']}:gamma={$af['gamma']},";
     $vf .= "hue=h={$af['hue']},";
     $vf .= "noise=alls={$af['noise']}:allf=t";
     $vf .= "[vid];";
+    
+    // Overlay video sobre fondo
     $vf .= "[bg][vid]overlay=0:{$vidY}:shortest=1[v1];";
+    
+    // Overlay título (imagen PNG con transparencia)
     $vf .= "[1:v]scale={$cw}:-1[title];";
     $vf .= "[v1][title]overlay=0:0[v2];";
+    
+    // Overlay logo
     $vf .= "[2:v]scale=-1:80[logo];";
     $vf .= "[v2][logo]overlay=30:H-110[vout]";
     
-    // Filtro de audio
+    // Construir filtro de audio
+    $af_filter = "";
     if ($hasVideoAudio) {
+        // Mezclar audio original (ajustado por velocidad) + música de fondo
         $af_filter = "[0:a]aresample=async=1000,atempo={$atempo},volume=0.75[a1];";
         $af_filter .= "[3:a]aresample=async=1000,volume=0.3[a2];";
         $af_filter .= "[a1][a2]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]";
     } else {
+        // Solo música de fondo
         $af_filter = "[3:a]aresample=async=1000,volume=0.5[aout]";
     }
     
     $fullFilter = $vf . ";" . $af_filter;
     
-    // Comando FFmpeg
+    // Comando principal
     $cmd = "$ffmpegPath -y ";
-    $cmd .= "-i " . escapeshellarg($inputFile) . " ";
-    $cmd .= "-i " . escapeshellarg($titleImgFile) . " ";
-    $cmd .= "-i " . escapeshellarg($logoPath) . " ";
-    $cmd .= "-stream_loop -1 -i " . escapeshellarg($audioPath) . " ";
+    $cmd .= "-i " . escapeshellarg($inputFile) . " ";           // Input 0: Video
+    $cmd .= "-i " . escapeshellarg($titleImgFile) . " ";        // Input 1: Título PNG
+    $cmd .= "-i " . escapeshellarg($logoPath) . " ";            // Input 2: Logo
+    $cmd .= "-stream_loop -1 -i " . escapeshellarg($audioPath) . " "; // Input 3: Audio loop
     $cmd .= "-filter_complex \"" . $fullFilter . "\" ";
     $cmd .= "-map \"[vout]\" -map \"[aout]\" ";
     $cmd .= "-c:v libx264 -preset {$preset} -crf 23 -threads {$threads} ";
     $cmd .= "-c:a aac -b:a 192k -ar 44100 ";
     $cmd .= "-movflags +faststart ";
-    $cmd .= "-t " . ceil($seconds / $af['speed']) . " ";
+    $cmd .= "-t " . ceil($seconds / $af['speed']) . " "; // Duración ajustada
     $cmd .= "-metadata title=\"VID" . date('ymdHis') . mt_rand(100,999) . "\" ";
     $cmd .= escapeshellarg($outputFile);
 
     // Guardar estado
-    file_put_contents($jobFile, json_encode([
+    $jobData = [
         'status' => 'processing',
         'file' => $outputFileName,
         'start' => time(),
         'duration' => $seconds,
-        'title' => $title,
-        'af' => $af
-    ]));
+        'af' => $af,
+        'dims' => "{$videoWidth}x{$videoHeight}",
+        'hasAudio' => $hasVideoAudio
+    ];
+    file_put_contents($jobFile, json_encode($jobData));
 
-    // Script bash
+    // Crear script bash
     $script = "#!/bin/bash\n";
-    $script .= "cd " . escapeshellarg($baseDir) . "\n";
-    $script .= "echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] Iniciando: $jobId\" >> " . escapeshellarg($logFile) . "\n";
+    $script .= "cd " . escapeshellarg($baseDir) . "\n\n";
+    
+    // Función de log
+    $script .= "log() {\n";
+    $script .= "  echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] \$1\" >> " . escapeshellarg($logFile) . "\n";
+    $script .= "}\n\n";
+    
+    $script .= "log \"Iniciando procesamiento: $jobId\"\n";
+    $script .= "log \"Comando FFmpeg ejecutándose...\"\n\n";
+    
+    // Ejecutar FFmpeg
     $script .= $cmd . " >> " . escapeshellarg($logFile) . " 2>&1\n";
-    $script .= "RESULT=\$?\n";
+    $script .= "RESULT=\$?\n\n";
+    
     $script .= "if [ \$RESULT -eq 0 ] && [ -f " . escapeshellarg($outputFile) . " ]; then\n";
     $script .= "  SIZE=\$(du -h " . escapeshellarg($outputFile) . " 2>/dev/null | cut -f1)\n";
-    $script .= "  echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] COMPLETADO: \$SIZE\" >> " . escapeshellarg($logFile) . "\n";
+    $script .= "  log \"COMPLETADO: \$SIZE\"\n";
     $script .= "else\n";
-    $script .= "  echo \"[\$(date '+%Y-%m-%d %H:%M:%S')] ERROR: codigo \$RESULT\" >> " . escapeshellarg($logFile) . "\n";
-    $script .= "fi\n";
+    $script .= "  log \"ERROR: FFmpeg terminó con código \$RESULT\"\n";
+    $script .= "fi\n\n";
+    
+    // Limpiar archivos temporales
     $script .= "rm -f " . escapeshellarg($inputFile) . " 2>/dev/null\n";
     $script .= "rm -f " . escapeshellarg($titleImgFile) . " 2>/dev/null\n";
+    $script .= "rm -f " . escapeshellarg($tempVideo) . " 2>/dev/null\n";
+    $script .= "log \"Limpieza completada\"\n";
+    $script .= "log \"===================\"\n";
     
     file_put_contents($scriptFile, $script);
     chmod($scriptFile, 0755);
     
-    exec("nohup nice -n 19 bash " . escapeshellarg($scriptFile) . " > /dev/null 2>&1 &");
+    // Ejecutar en background con prioridad baja
+    $execCmd = "nohup nice -n 19 ionice -c 3 bash " . escapeshellarg($scriptFile) . " > /dev/null 2>&1 &";
+    exec($execCmd);
+    
+    logMsg("Script iniciado en background");
 
     sendJson(['status' => 'success', 'jobId' => $jobId]);
 }
@@ -401,35 +419,53 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 // ==========================================
 if ($action === 'status') {
     $id = preg_replace('/[^a-zA-Z0-9_]/', '', $_GET['jobId'] ?? '');
-    if (empty($id)) sendJson(['status' => 'error', 'msg' => 'ID inválido']);
+    if (empty($id)) {
+        sendJson(['status' => 'error', 'msg' => 'ID inválido']);
+    }
     
     $jFile = "$jobsDir/{$id}.json";
-    if (!file_exists($jFile)) sendJson(['status' => 'error', 'msg' => 'Job no encontrado']);
+    
+    if (!file_exists($jFile)) {
+        sendJson(['status' => 'error', 'msg' => 'Job no encontrado']);
+    }
     
     $data = json_decode(file_get_contents($jFile), true);
-    if (!$data) sendJson(['status' => 'error', 'msg' => 'Error leyendo job']);
+    if (!$data) {
+        sendJson(['status' => 'error', 'msg' => 'Error leyendo job']);
+    }
     
     $outputPath = "$processedDir/" . $data['file'];
     
+    // Verificar si terminó
     if (file_exists($outputPath)) {
         clearstatcache(true, $outputPath);
         $size = filesize($outputPath);
         $mtime = filemtime($outputPath);
         
+        // Archivo válido y estable (no modificado en 3 segundos)
         if ($size > 50000 && (time() - $mtime) > 3) {
-            sendJson(['status' => 'finished', 'file' => $data['file']]);
+            sendJson(['status' => 'finished', 'file' => $data['file'], 'size' => $size]);
         }
     }
     
+    // Timeout: duración * 5 + 10 minutos
     $timeout = ($data['duration'] * 5) + 600;
     $elapsed = time() - $data['start'];
     
     if ($elapsed > $timeout) {
-        sendJson(['status' => 'error', 'msg' => 'Timeout. Intenta con video más corto.']);
+        sendJson(['status' => 'error', 'msg' => 'Timeout - proceso muy lento. Intenta con un video más corto.']);
     }
     
-    $progress = min(95, round(($elapsed / ($data['duration'] * 2.5)) * 100));
-    sendJson(['status' => 'processing', 'progress' => $progress]);
+    // Calcular progreso estimado
+    // Estimamos que el proceso toma ~2x la duración del video
+    $estimatedTime = $data['duration'] * 2.5;
+    $progress = min(95, round(($elapsed / $estimatedTime) * 100));
+    
+    sendJson([
+        'status' => 'processing',
+        'progress' => $progress,
+        'elapsed' => $elapsed
+    ]);
 }
 
 // ==========================================
@@ -444,11 +480,16 @@ if ($action === 'download' && isset($_GET['file'])) {
         die('Archivo no encontrado');
     }
     
+    $size = filesize($path);
+    $filename = 'VIRAL_' . date('md_His') . '_' . mt_rand(100, 999) . '.mp4';
+    
     while (ob_get_level()) ob_end_clean();
     
     header('Content-Type: video/mp4');
-    header('Content-Disposition: attachment; filename="VIRAL_' . date('md_His') . '.mp4"');
-    header('Content-Length: ' . filesize($path));
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Content-Length: ' . $size);
+    header('Cache-Control: no-cache');
+    header('Pragma: no-cache');
     
     readfile($path);
     exit;
@@ -460,58 +501,94 @@ if ($action === 'download' && isset($_GET['file'])) {
 if ($action === 'debug') {
     header('Content-Type: text/plain; charset=utf-8');
     
-    echo "=== VIRAL MAKER v76 ===\n\n";
-    echo "FFmpeg: " . ($hasFfmpeg ? "OK" : "NO") . "\n";
-    echo "FFprobe: " . (!empty($ffprobePath) ? "OK" : "NO") . "\n";
-    echo "PHP GD: " . ($hasGD ? "OK" : "NO") . "\n\n";
+    echo "=== VIRAL MAKER v75 - DEBUG ===\n\n";
     
-    echo "logo.png: " . ($hasLogo ? "OK" : "FALTA") . "\n";
-    echo "font.ttf: " . ($hasFont ? "OK" : "FALTA") . "\n";
-    echo "news.mp3: " . ($hasAudio ? "OK" : "FALTA") . "\n\n";
+    echo "SISTEMA:\n";
+    echo "- FFmpeg: " . ($hasFfmpeg ? "OK ($ffmpegPath)" : "NO INSTALADO") . "\n";
+    echo "- FFprobe: " . (!empty($ffprobePath) ? "OK" : "NO") . "\n";
+    echo "- PHP GD: " . ($hasGD ? "OK" : "NO INSTALADO") . "\n";
+    echo "- Memory Limit: " . ini_get('memory_limit') . "\n";
+    echo "- Max Execution: " . ini_get('max_execution_time') . "\n\n";
     
-    echo "=== ANTI-FINGERPRINT ===\n";
-    echo "Velocidad: 0.98x - 1.02x\n";
-    echo "Saturacion: 1.05 - 1.17\n";
-    echo "Contraste: 1.02 - 1.08\n";
-    echo "Brillo: -0.015 a +0.015\n";
-    echo "Hue: -4 a +4\n";
-    echo "Gamma: 0.97 - 1.03\n";
-    echo "Noise: 1-2\n";
-    echo "Audio musica: 0.3\n\n";
+    echo "ARCHIVOS:\n";
+    echo "- logo.png: " . ($hasLogo ? "OK (" . filesize($logoPath) . " bytes)" : "FALTA") . "\n";
+    echo "- font.ttf: " . ($hasFont ? "OK (" . filesize($fontPath) . " bytes)" : "FALTA") . "\n";
+    echo "- news.mp3: " . ($hasAudio ? "OK (" . round(filesize($audioPath)/1024) . " KB)" : "FALTA") . "\n\n";
     
-    echo "=== LOG ===\n";
-    if (file_exists($logFile)) {
-        echo implode("", array_slice(file($logFile), -50));
+    echo "ANTI-FINGERPRINT:\n";
+    echo "- Velocidad: 0.98x - 1.02x\n";
+    echo "- Saturación: 1.05 - 1.17\n";
+    echo "- Contraste: 1.02 - 1.08\n";
+    echo "- Brillo: -0.015 a +0.015\n";
+    echo "- Hue: -4 a +4 grados\n";
+    echo "- Gamma: 0.97 - 1.03\n";
+    echo "- Noise: 1-2\n";
+    echo "- Volumen música: 0.3\n\n";
+    
+    echo "JOBS ACTIVOS:\n";
+    $jobs = glob("$jobsDir/*.json");
+    if (empty($jobs)) {
+        echo "- Ninguno\n";
+    } else {
+        foreach ($jobs as $jf) {
+            $jd = @json_decode(file_get_contents($jf), true);
+            if ($jd) {
+                $age = time() - ($jd['start'] ?? 0);
+                $file = $jd['file'] ?? '?';
+                $exists = file_exists("$processedDir/$file") ? 'LISTO' : 'procesando';
+                echo "- " . basename($jf, '.json') . ": {$jd['duration']}s, {$age}s ago, $exists\n";
+            }
+        }
     }
+    
+    echo "\n=== LOG (últimas 100 líneas) ===\n";
+    if (file_exists($logFile)) {
+        $lines = file($logFile, FILE_IGNORE_NEW_LINES);
+        $lines = array_slice($lines, -100);
+        echo implode("\n", $lines);
+    } else {
+        echo "(vacío)";
+    }
+    
     exit;
 }
 
+// ==========================================
+// API: CLEAR
+// ==========================================
 if ($action === 'clear') {
     @unlink($logFile);
-    array_map('unlink', glob("$jobsDir/*") ?: []);
-    array_map('unlink', glob("$uploadDir/*") ?: []);
-    array_map('unlink', glob("$assetsDir/*") ?: []);
+    array_map('unlink', glob("$jobsDir/*"));
+    array_map('unlink', glob("$uploadDir/*"));
+    array_map('unlink', glob("$assetsDir/*"));
     header('Location: ?action=debug');
     exit;
 }
 
+// ==========================================
+// INTERFAZ HTML
+// ==========================================
 if (ob_get_level()) ob_end_clean();
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Maker v76</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Viral Maker v75</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        :root { --gold: #FFD700; }
+        :root {
+            --gold: #FFD700;
+            --dark: #0a0a0a;
+            --card: #111;
+        }
         * { box-sizing: border-box; }
         body {
             background: linear-gradient(145deg, #050505 0%, #0f0f1a 100%);
             color: #fff;
-            font-family: 'Inter', sans-serif;
+            font-family: 'Inter', system-ui, sans-serif;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -520,53 +597,128 @@ if (ob_get_level()) ob_end_clean();
             margin: 0;
         }
         .card {
-            background: #111;
+            background: var(--card);
             border: 1px solid #222;
-            max-width: 450px;
+            max-width: 460px;
             width: 100%;
             padding: 28px;
             border-radius: 20px;
             box-shadow: 0 25px 80px rgba(0,0,0,0.7);
         }
-        h2 { font-family: 'Anton', sans-serif; font-size: 2rem; letter-spacing: 3px; margin: 0; }
-        .subtitle { color: #555; font-size: 0.7rem; letter-spacing: 1px; }
+        h2 {
+            font-family: 'Anton', sans-serif;
+            font-size: 2rem;
+            letter-spacing: 3px;
+            margin: 0;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 0.7rem;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+        }
         .form-control {
             background: #080808 !important;
             color: var(--gold) !important;
             border: 2px solid #1a1a1a;
             border-radius: 12px;
-            padding: 14px;
+            padding: 14px 16px;
             font-size: 1rem;
+            transition: all 0.3s;
         }
-        .form-control:focus { border-color: var(--gold); box-shadow: 0 0 15px rgba(255,215,0,0.1); outline: none; }
+        .form-control:focus {
+            border-color: var(--gold);
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.1);
+            outline: none;
+        }
         .form-control::placeholder { color: #444; }
+        .form-control[type="file"] { padding: 12px; }
+        
         .btn-go {
             width: 100%;
             padding: 16px;
-            background: linear-gradient(135deg, #FFD700, #e6a800);
+            background: linear-gradient(135deg, #FFD700 0%, #e6a800 100%);
             color: #000;
             font-family: 'Anton', sans-serif;
-            font-size: 1.2rem;
+            font-size: 1.25rem;
             letter-spacing: 2px;
             border: none;
             border-radius: 12px;
             cursor: pointer;
+            transition: all 0.3s;
             margin-top: 15px;
         }
-        .btn-go:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(255,215,0,0.25); }
-        .btn-go:disabled { background: #222; color: #444; cursor: not-allowed; }
+        .btn-go:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(255, 215, 0, 0.3);
+        }
+        .btn-go:disabled {
+            background: #222;
+            color: #444;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
         .hidden { display: none !important; }
-        .progress { height: 10px; background: #1a1a1a; border-radius: 5px; margin: 20px 0; }
-        .progress-bar { background: linear-gradient(90deg, var(--gold), #ff8c00); }
-        video { width: 100%; border-radius: 12px; margin: 15px 0; border: 2px solid #222; }
-        .info { font-size: 0.8rem; color: #555; margin-top: 6px; }
+        
+        .progress {
+            height: 10px;
+            background: #1a1a1a;
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        .progress-bar {
+            background: linear-gradient(90deg, var(--gold), #ff8c00);
+            transition: width 0.5s ease;
+        }
+        
+        video {
+            width: 100%;
+            border-radius: 12px;
+            margin: 15px 0;
+            border: 2px solid #222;
+        }
+        
+        .info { font-size: 0.8rem; color: #555; margin-top: 8px; }
         .info.ok { color: #4a4; }
         .info.warn { color: #a84; }
-        .char-counter { font-size: 0.7rem; color: #444; text-align: right; margin-top: 3px; }
+        .info.err { color: #a44; }
+        
+        .char-counter {
+            font-size: 0.75rem;
+            color: #444;
+            text-align: right;
+            margin-top: 4px;
+        }
         .char-counter.warn { color: #a84; }
         .char-counter.max { color: #a44; }
-        .tag { display: inline-block; background: rgba(255,215,0,0.08); color: var(--gold); font-size: 0.65rem; padding: 3px 10px; border-radius: 20px; margin: 3px; }
-        .alert-box { background: rgba(170,50,50,0.1); border: 1px solid #633; color: #c88; border-radius: 10px; padding: 15px; font-size: 0.85rem; }
+        
+        .tag {
+            display: inline-block;
+            background: rgba(255,215,0,0.08);
+            color: var(--gold);
+            font-size: 0.65rem;
+            padding: 3px 10px;
+            border-radius: 20px;
+            margin: 3px;
+        }
+        
+        .alert-box {
+            background: rgba(170, 50, 50, 0.1);
+            border: 1px solid #633;
+            color: #c88;
+            border-radius: 12px;
+            padding: 15px;
+            font-size: 0.85rem;
+        }
+        
+        .form-check-input:checked {
+            background-color: var(--gold);
+            border-color: var(--gold);
+        }
+        
         .spinner-border { width: 3rem; height: 3rem; }
     </style>
 </head>
@@ -574,28 +726,30 @@ if (ob_get_level()) ob_end_clean();
 
 <div class="card">
     <div class="text-center mb-4">
-        <h2>VIRAL MAKER <span style="color:var(--gold)">v76</span></h2>
-        <p class="subtitle">ANTI-FINGERPRINT COMPLETO</p>
+        <h2>VIRAL MAKER <span style="color: var(--gold)">v75</span></h2>
+        <p class="subtitle">Anti-Fingerprint • Emojis • Videos Largos</p>
         <div class="mt-2">
-            <span class="tag">Hash Único</span>
-            <span class="tag">5 Min Max</span>
-            <span class="tag">Audio 0.3</span>
+            <span class="tag">🔒 Hash Único</span>
+            <span class="tag">⚡ 5 Min Max</span>
+            <span class="tag">🎵 Audio 0.3</span>
         </div>
     </div>
 
+    <!-- FORMULARIO -->
     <div id="formSection">
         <?php if (!$hasFfmpeg): ?>
-            <div class="alert-box">FFmpeg no instalado.</div>
+            <div class="alert-box">⚠️ FFmpeg no está instalado en el servidor.</div>
         <?php elseif (!$hasGD): ?>
-            <div class="alert-box">PHP GD no instalado.</div>
+            <div class="alert-box">⚠️ PHP GD no está instalado (necesario para emojis).</div>
         <?php elseif (!empty($missingFiles)): ?>
             <div class="alert-box">
-                Archivos faltantes:<br>
+                <strong>Archivos faltantes:</strong><br>
                 <?php foreach($missingFiles as $f) echo "• $f<br>"; ?>
             </div>
         <?php else: ?>
             <div class="mb-3">
-                <input type="text" id="titleInput" class="form-control" placeholder="TÍTULO DEL VIDEO" maxlength="36">
+                <input type="text" id="titleInput" class="form-control" 
+                       placeholder="TÍTULO CON EMOJIS 🔥✨💰" maxlength="36" autocomplete="off">
                 <div class="char-counter" id="charCounter">0 / 36</div>
             </div>
             
@@ -605,8 +759,8 @@ if (ob_get_level()) ob_end_clean();
             </div>
             
             <div class="form-check form-switch d-flex justify-content-center gap-2">
-                <input class="form-check-input" type="checkbox" id="mirrorCheck" style="cursor:pointer">
-                <label class="form-check-label text-secondary">Modo Espejo</label>
+                <input class="form-check-input" type="checkbox" id="mirrorCheck">
+                <label class="form-check-label text-secondary" for="mirrorCheck">Modo Espejo</label>
             </div>
             
             <button id="submitBtn" class="btn-go" disabled>CREAR VIDEO VIRAL</button>
@@ -617,147 +771,224 @@ if (ob_get_level()) ob_end_clean();
         <?php endif; ?>
     </div>
 
+    <!-- PROCESANDO -->
     <div id="processSection" class="hidden text-center">
         <div class="spinner-border text-warning mb-3"></div>
-        <h5>PROCESANDO</h5>
-        <p class="text-secondary small">Aplicando anti-fingerprint...</p>
+        <h5>PROCESANDO VIDEO</h5>
+        <p class="text-secondary small">Aplicando efectos anti-fingerprint...</p>
         <div class="progress">
-            <div id="progressBar" class="progress-bar" style="width:0%"></div>
+            <div id="progressBar" class="progress-bar" style="width: 0%"></div>
         </div>
-        <div id="progressText" class="text-warning fw-bold" style="font-size:1.2rem">0%</div>
+        <div id="progressText" class="text-warning fw-bold" style="font-size: 1.2rem;">0%</div>
         <div id="timeInfo" class="text-secondary small mt-1"></div>
     </div>
 
+    <!-- RESULTADO -->
     <div id="resultSection" class="hidden text-center">
         <video id="resultVideo" controls autoplay loop playsinline></video>
-        <a id="downloadBtn" class="btn btn-success w-100 py-3 fw-bold mb-2">DESCARGAR VIDEO</a>
-        <button onclick="location.reload()" class="btn btn-outline-warning w-100">NUEVO VIDEO</button>
-        <p class="text-secondary small mt-3 mb-0">Hash único • Listo para redes sociales</p>
+        <a id="downloadBtn" class="btn btn-success w-100 py-3 fw-bold mb-2" download>
+            ⬇️ DESCARGAR VIDEO
+        </a>
+        <button onclick="location.reload()" class="btn btn-outline-warning w-100">
+            🎬 CREAR OTRO VIDEO
+        </button>
+        <p class="text-secondary small mt-3 mb-0">
+            ✓ Hash único generado<br>
+            ✓ Listo para Facebook/TikTok/Instagram
+        </p>
     </div>
 </div>
 
 <script>
-const titleInput = document.getElementById('titleInput');
-const videoInput = document.getElementById('videoInput');
-const submitBtn = document.getElementById('submitBtn');
-const charCounter = document.getElementById('charCounter');
-const videoInfo = document.getElementById('videoInfo');
-const formSection = document.getElementById('formSection');
-const processSection = document.getElementById('processSection');
-const resultSection = document.getElementById('resultSection');
-const progressBar = document.getElementById('progressBar');
-const progressText = document.getElementById('progressText');
-const timeInfo = document.getElementById('timeInfo');
-
-let videoDuration = 0;
-
-function validate() {
-    const hasTitle = titleInput && titleInput.value.trim().length > 0;
-    const hasVideo = videoInput && videoInput.files.length > 0;
-    const validDur = videoDuration <= 300 || videoDuration === 0;
-    if (submitBtn) submitBtn.disabled = !(hasTitle && hasVideo && validDur);
-}
-
-if (titleInput) {
-    titleInput.addEventListener('input', function() {
-        this.value = this.value.toUpperCase();
-        const len = this.value.length;
-        charCounter.textContent = len + ' / 36';
-        charCounter.className = 'char-counter';
-        if (len > 28) charCounter.classList.add('warn');
-        if (len >= 36) charCounter.classList.add('max');
-        validate();
-    });
-}
-
-if (videoInput) {
-    videoInput.addEventListener('change', function() {
-        const file = this.files[0];
-        if (!file) { videoDuration = 0; validate(); return; }
-        
-        const sizeMB = (file.size / 1048576).toFixed(1);
-        const video = document.createElement('video');
-        video.preload = 'metadata';
-        
-        video.onloadedmetadata = function() {
-            videoDuration = video.duration;
-            const m = Math.floor(videoDuration / 60);
-            const s = Math.floor(videoDuration % 60);
-            const dur = m + ':' + String(s).padStart(2, '0');
-            
-            videoInfo.className = 'info';
-            if (videoDuration > 300) {
-                videoInfo.classList.add('warn');
-                videoInfo.innerHTML = '⚠️ ' + dur + ' (máx 5:00) | ' + sizeMB + ' MB';
-            } else {
-                videoInfo.classList.add('ok');
-                videoInfo.innerHTML = '✓ ' + dur + ' | ' + sizeMB + ' MB';
-            }
-            URL.revokeObjectURL(video.src);
-            validate();
-        };
-        video.src = URL.createObjectURL(file);
-    });
-}
-
-if (submitBtn) {
-    submitBtn.addEventListener('click', async function() {
-        const title = titleInput.value.trim();
-        const file = videoInput.files[0];
-        
-        if (!title || !file || videoDuration > 300) return;
-        
-        formSection.classList.add('hidden');
-        processSection.classList.remove('hidden');
-        
-        const fd = new FormData();
-        fd.append('videoFile', file);
-        fd.append('videoTitle', title);
-        fd.append('mirrorMode', document.getElementById('mirrorCheck').checked);
-        
-        try {
-            const res = await fetch('?action=upload', { method: 'POST', body: fd });
-            const txt = await res.text();
-            let data;
-            try { data = JSON.parse(txt); } catch(e) { throw new Error('Error servidor'); }
-            
-            if (data.status === 'error') { alert(data.msg); location.reload(); return; }
-            
-            track(data.jobId);
-        } catch(e) {
-            alert(e.message);
-            location.reload();
-        }
-    });
-}
-
-function track(jobId) {
-    const start = Date.now();
+document.addEventListener('DOMContentLoaded', function() {
+    const titleInput = document.getElementById('titleInput');
+    const videoInput = document.getElementById('videoInput');
+    const submitBtn = document.getElementById('submitBtn');
+    const charCounter = document.getElementById('charCounter');
+    const videoInfo = document.getElementById('videoInfo');
     
-    const iv = setInterval(async () => {
-        try {
-            const res = await fetch('?action=status&jobId=' + jobId);
-            const data = await res.json();
-            
-            if (data.status === 'finished') {
-                clearInterval(iv);
-                processSection.classList.add('hidden');
-                resultSection.classList.remove('hidden');
-                document.getElementById('resultVideo').src = 'processed/' + data.file + '?t=' + Date.now();
-                document.getElementById('downloadBtn').href = '?action=download&file=' + data.file;
-            } else if (data.status === 'error') {
-                clearInterval(iv);
-                alert(data.msg);
-                location.reload();
-            } else {
-                progressBar.style.width = data.progress + '%';
-                progressText.textContent = data.progress + '%';
-                const elapsed = Math.floor((Date.now() - start) / 1000);
-                timeInfo.textContent = Math.floor(elapsed/60) + 'm ' + (elapsed%60) + 's';
+    const formSection = document.getElementById('formSection');
+    const processSection = document.getElementById('processSection');
+    const resultSection = document.getElementById('resultSection');
+    
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
+    const timeInfo = document.getElementById('timeInfo');
+    
+    let videoDuration = 0;
+    const MAX_DURATION = 300;
+    
+    function validateForm() {
+        const hasTitle = titleInput && titleInput.value.trim().length > 0;
+        const hasVideo = videoInput && videoInput.files.length > 0;
+        const validDuration = videoDuration <= MAX_DURATION || videoDuration === 0;
+        submitBtn.disabled = !(hasTitle && hasVideo && validDuration);
+    }
+    
+    // Título
+    if (titleInput) {
+        titleInput.addEventListener('input', function() {
+            // Convertir a mayúsculas preservando emojis
+            const val = this.value;
+            let result = '';
+            for (const char of val) {
+                result += char.toUpperCase();
             }
-        } catch(e) {}
-    }, 2500);
-}
+            this.value = result;
+            
+            const len = [...this.value].length;
+            charCounter.textContent = len + ' / 36';
+            charCounter.className = 'char-counter';
+            if (len > 28) charCounter.classList.add('warn');
+            if (len >= 36) charCounter.classList.add('max');
+            
+            validateForm();
+        });
+    }
+    
+    // Video
+    if (videoInput) {
+        videoInput.addEventListener('change', function() {
+            const file = this.files[0];
+            if (!file) {
+                videoInfo.textContent = '';
+                videoDuration = 0;
+                validateForm();
+                return;
+            }
+            
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+            
+            const video = document.createElement('video');
+            video.preload = 'metadata';
+            
+            video.onloadedmetadata = function() {
+                videoDuration = video.duration;
+                const mins = Math.floor(videoDuration / 60);
+                const secs = Math.floor(videoDuration % 60);
+                const durStr = mins + ':' + String(secs).padStart(2, '0');
+                const dimStr = video.videoWidth + 'x' + video.videoHeight;
+                
+                videoInfo.className = 'info';
+                if (videoDuration > MAX_DURATION) {
+                    videoInfo.classList.add('err');
+                    videoInfo.innerHTML = '⚠️ ' + durStr + ' (máx 5:00) | ' + dimStr + ' | ' + sizeMB + ' MB';
+                } else {
+                    videoInfo.classList.add('ok');
+                    videoInfo.innerHTML = '✓ ' + durStr + ' | ' + dimStr + ' | ' + sizeMB + ' MB';
+                }
+                
+                URL.revokeObjectURL(video.src);
+                validateForm();
+            };
+            
+            video.onerror = function() {
+                videoInfo.className = 'info';
+                videoInfo.textContent = sizeMB + ' MB';
+                videoDuration = 0;
+                validateForm();
+            };
+            
+            video.src = URL.createObjectURL(file);
+        });
+    }
+    
+    // Submit
+    if (submitBtn) {
+        submitBtn.addEventListener('click', async function() {
+            const title = titleInput.value.trim();
+            const file = videoInput.files[0];
+            
+            if (!title) { alert('El título es obligatorio'); return; }
+            if (!file) { alert('Selecciona un video'); return; }
+            if (videoDuration > MAX_DURATION) { alert('El video excede 5 minutos'); return; }
+            
+            // Cambiar vista
+            formSection.classList.add('hidden');
+            processSection.classList.remove('hidden');
+            
+            // Preparar datos
+            const formData = new FormData();
+            formData.append('videoFile', file);
+            formData.append('videoTitle', title);
+            formData.append('mirrorMode', document.getElementById('mirrorCheck').checked);
+            
+            try {
+                const response = await fetch('?action=upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const text = await response.text();
+                let data;
+                
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    console.error('Respuesta:', text);
+                    throw new Error('Error del servidor');
+                }
+                
+                if (data.status === 'error') {
+                    alert(data.msg);
+                    location.reload();
+                    return;
+                }
+                
+                // Iniciar tracking
+                trackProgress(data.jobId);
+                
+            } catch (err) {
+                alert('Error: ' + err.message);
+                location.reload();
+            }
+        });
+    }
+    
+    function trackProgress(jobId) {
+        const startTime = Date.now();
+        
+        const interval = setInterval(async function() {
+            try {
+                const response = await fetch('?action=status&jobId=' + encodeURIComponent(jobId));
+                const data = await response.json();
+                
+                if (data.status === 'finished') {
+                    clearInterval(interval);
+                    showResult(data.file);
+                    
+                } else if (data.status === 'error') {
+                    clearInterval(interval);
+                    alert(data.msg);
+                    location.reload();
+                    
+                } else {
+                    // Actualizar progreso
+                    progressBar.style.width = data.progress + '%';
+                    progressText.textContent = data.progress + '%';
+                    
+                    // Tiempo transcurrido
+                    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+                    const mins = Math.floor(elapsed / 60);
+                    const secs = elapsed % 60;
+                    timeInfo.textContent = 'Tiempo: ' + mins + 'm ' + secs + 's';
+                }
+                
+            } catch (err) {
+                console.log('Verificando...');
+            }
+        }, 2500);
+    }
+    
+    function showResult(filename) {
+        processSection.classList.add('hidden');
+        resultSection.classList.remove('hidden');
+        
+        const videoUrl = 'processed/' + filename + '?t=' + Date.now();
+        document.getElementById('resultVideo').src = videoUrl;
+        document.getElementById('downloadBtn').href = '?action=download&file=' + encodeURIComponent(filename);
+    }
+});
 </script>
 
 </body>
