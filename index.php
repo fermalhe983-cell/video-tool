@@ -1,6 +1,7 @@
 <?php
 // ==========================================
-// VIRAL REELS MAKER v72.0 - AUDIO ALTO + EMOJIS + 5 MIN
+// VIRAL REELS MAKER v73.0 - ANTI-FINGERPRINT + EMOJIS + UNIVERSAL
+// Cambios sutiles para evitar detección de contenido duplicado
 // ==========================================
 
 error_reporting(E_ALL);
@@ -19,6 +20,7 @@ $processedDir = $baseDir . '/processed';
 $jobsDir = $baseDir . '/jobs'; 
 $logoPath = $baseDir . '/logo.png'; 
 $fontPath = $baseDir . '/font.ttf'; 
+$emojiFontPath = $baseDir . '/NotoColorEmoji.ttf'; // Fuente separada para emojis
 $audioPath = $baseDir . '/news.mp3';
 $logFile = $baseDir . '/ffmpeg_log.txt';
 
@@ -26,7 +28,7 @@ if (!file_exists($uploadDir)) @mkdir($uploadDir, 0777, true);
 if (!file_exists($processedDir)) @mkdir($processedDir, 0777, true);
 if (!file_exists($jobsDir)) @mkdir($jobsDir, 0777, true);
 
-// Limpieza (archivos > 3 horas para videos largos)
+// Limpieza (archivos > 3 horas)
 foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
     if(is_dir($dir)){
         foreach (glob("$dir/*") as $file) {
@@ -37,35 +39,80 @@ foreach ([$uploadDir, $processedDir, $jobsDir] as $dir) {
 
 function sendJson($data) {
     if (ob_get_length()) ob_clean(); 
-    header('Content-Type: application/json');
-    echo json_encode($data);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE);
     exit;
 }
 
-// Escapar texto para filtros FFmpeg (compatible con emojis)
+// Escapar texto para FFmpeg
 function escapeFFmpegText($text) {
-    // Primero escapamos backslashes
     $text = str_replace("\\", "\\\\", $text);
-    // Luego los caracteres especiales de FFmpeg
-    $text = str_replace("'", "'\\''", $text); // Escapar comillas simples para shell
+    $text = str_replace("'", "'\\''", $text);
     $text = str_replace(":", "\\:", $text);
     $text = str_replace("[", "\\[", $text);
     $text = str_replace("]", "\\]", $text);
     $text = str_replace("%", "\\%", $text);
+    $text = str_replace("\"", "\\\"", $text);
     return $text;
+}
+
+// Separar emojis del texto
+function separateEmojis($text) {
+    // Patrón para detectar emojis
+    $emojiPattern = '/[\x{1F600}-\x{1F64F}]|[\x{1F300}-\x{1F5FF}]|[\x{1F680}-\x{1F6FF}]|[\x{1F1E0}-\x{1F1FF}]|[\x{2600}-\x{26FF}]|[\x{2700}-\x{27BF}]|[\x{FE00}-\x{FE0F}]|[\x{1F900}-\x{1F9FF}]|[\x{1FA00}-\x{1FA6F}]|[\x{1FA70}-\x{1FAFF}]|[\x{231A}-\x{231B}]|[\x{23E9}-\x{23F3}]|[\x{23F8}-\x{23FA}]|[\x{25AA}-\x{25AB}]|[\x{25B6}]|[\x{25C0}]|[\x{25FB}-\x{25FE}]|[\x{2614}-\x{2615}]|[\x{2648}-\x{2653}]|[\x{267F}]|[\x{2693}]|[\x{26A1}]|[\x{26AA}-\x{26AB}]|[\x{26BD}-\x{26BE}]|[\x{26C4}-\x{26C5}]|[\x{26CE}]|[\x{26D4}]|[\x{26EA}]|[\x{26F2}-\x{26F3}]|[\x{26F5}]|[\x{26FA}]|[\x{26FD}]|[\x{2702}]|[\x{2705}]|[\x{2708}-\x{270D}]|[\x{270F}]|[\x{2712}]|[\x{2714}]|[\x{2716}]|[\x{271D}]|[\x{2721}]|[\x{2728}]|[\x{2733}-\x{2734}]|[\x{2744}]|[\x{2747}]|[\x{274C}]|[\x{274E}]|[\x{2753}-\x{2755}]|[\x{2757}]|[\x{2763}-\x{2764}]|[\x{2795}-\x{2797}]|[\x{27A1}]|[\x{27B0}]|[\x{27BF}]|[\x{2934}-\x{2935}]|[\x{2B05}-\x{2B07}]|[\x{2B1B}-\x{2B1C}]|[\x{2B50}]|[\x{2B55}]|[\x{3030}]|[\x{303D}]|[\x{3297}]|[\x{3299}]|[\x{200D}]|[\x{20E3}]|[\x{FE0F}]/u';
+    
+    // Extraer emojis
+    preg_match_all($emojiPattern, $text, $emojis);
+    $emojiList = $emojis[0];
+    
+    // Texto sin emojis
+    $textOnly = preg_replace($emojiPattern, '', $text);
+    $textOnly = preg_replace('/\s+/', ' ', trim($textOnly));
+    
+    return [
+        'text' => $textOnly,
+        'emojis' => $emojiList,
+        'emojiString' => implode('', $emojiList)
+    ];
+}
+
+// Generar valores aleatorios sutiles para anti-fingerprint
+function getAntiFingerprint() {
+    return [
+        // Velocidad: entre 0.97 y 1.03 (casi imperceptible)
+        'speed' => round(0.97 + (mt_rand(0, 60) / 1000), 3),
+        // Pitch del audio: compensar velocidad
+        'atempo' => round(1 / (0.97 + (mt_rand(0, 60) / 1000)), 4),
+        // Saturación: entre 1.05 y 1.20
+        'saturation' => round(1.05 + (mt_rand(0, 150) / 1000), 3),
+        // Contraste: entre 1.02 y 1.10
+        'contrast' => round(1.02 + (mt_rand(0, 80) / 1000), 3),
+        // Brillo: entre -0.02 y 0.02
+        'brightness' => round((mt_rand(-20, 20) / 1000), 3),
+        // Hue: entre -5 y 5 grados
+        'hue' => mt_rand(-5, 5),
+        // Zoom muy sutil: entre 1.00 y 1.03
+        'zoom' => round(1.00 + (mt_rand(0, 30) / 1000), 3),
+        // Noise muy sutil
+        'noise' => mt_rand(1, 3),
+        // Rotación mínima: entre -0.5 y 0.5 grados
+        'rotation' => round((mt_rand(-5, 5) / 10), 2),
+        // Gamma: entre 0.95 y 1.05
+        'gamma' => round(0.95 + (mt_rand(0, 100) / 1000), 3),
+    ];
 }
 
 $action = $_GET['action'] ?? '';
 $ffmpegPath = trim(shell_exec('which ffmpeg'));
 $hasFfmpeg = !empty($ffmpegPath);
 
-// Verificar archivos obligatorios
 $hasLogo = file_exists($logoPath);
 $hasFont = file_exists($fontPath);
+$hasEmojiFont = file_exists($emojiFontPath);
 $hasAudio = file_exists($audioPath);
 $missingFiles = [];
 if (!$hasLogo) $missingFiles[] = 'logo.png';
-if (!$hasFont) $missingFiles[] = 'font.ttf (debe soportar emojis, ej: NotoColorEmoji)';
+if (!$hasFont) $missingFiles[] = 'font.ttf';
 if (!$hasAudio) $missingFiles[] = 'news.mp3';
 
 // ==========================================
@@ -78,7 +125,6 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$hasFfmpeg) sendJson(['status'=>'error', 'msg'=>'FFmpeg no instalado.']);
-    
     if (!$hasLogo) sendJson(['status'=>'error', 'msg'=>'Falta logo.png']);
     if (!$hasFont) sendJson(['status'=>'error', 'msg'=>'Falta font.ttf']);
     if (!$hasAudio) sendJson(['status'=>'error', 'msg'=>'Falta news.mp3']);
@@ -88,7 +134,7 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         sendJson(['status'=>'error', 'msg'=>'El título es obligatorio.']);
     }
 
-    $jobId = uniqid('v72_');
+    $jobId = uniqid('v73_');
     $ext = strtolower(pathinfo($_FILES['videoFile']['name'], PATHINFO_EXTENSION));
     $inputFile = "$uploadDir/{$jobId}_in.$ext";
     $tempVideo = "$uploadDir/{$jobId}_temp.mp4";
@@ -96,62 +142,79 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $outputFile = "$processedDir/$outputFileName";
     $jobFile = "$jobsDir/$jobId.json";
     $scriptFile = "$jobsDir/{$jobId}.sh";
-    $filterFile = "$jobsDir/{$jobId}_filter.txt"; // Filtro en archivo separado
 
     if (!move_uploaded_file($_FILES['videoFile']['tmp_name'], $inputFile)) {
         sendJson(['status'=>'error', 'msg'=>'Error guardando archivo.']);
     }
     chmod($inputFile, 0777);
-    gc_collect_cycles();
 
-    // Obtener duración
+    // Obtener info del video
     $ffprobePath = trim(shell_exec('which ffprobe'));
+    $seconds = 60;
+    $videoWidth = 0;
+    $videoHeight = 0;
+    
     if (!empty($ffprobePath)) {
+        // Duración
         $durCmd = "$ffprobePath -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 " . escapeshellarg($inputFile);
         $seconds = floatval(trim(shell_exec($durCmd)));
-    } else {
-        $durCmd = "$ffmpegPath -i " . escapeshellarg($inputFile) . " 2>&1 | grep Duration";
-        $durOut = shell_exec($durCmd);
-        preg_match('/Duration: (\d{2}):(\d{2}):(\d{2}\.\d{2})/', $durOut, $matches);
-        $seconds = 60;
-        if (!empty($matches)) {
-            $seconds = ($matches[1] * 3600) + ($matches[2] * 60) + floatval($matches[3]);
+        
+        // Dimensiones
+        $dimCmd = "$ffprobePath -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 " . escapeshellarg($inputFile);
+        $dimensions = trim(shell_exec($dimCmd));
+        if (preg_match('/(\d+)x(\d+)/', $dimensions, $dm)) {
+            $videoWidth = intval($dm[1]);
+            $videoHeight = intval($dm[2]);
         }
     }
     
     if ($seconds < 1) $seconds = 60;
-    
-    // Límite de 5 minutos (300 segundos)
     if ($seconds > 300) {
         @unlink($inputFile);
-        sendJson(['status'=>'error', 'msg'=>'El video excede 5 minutos. Máximo permitido: 5:00']);
+        sendJson(['status'=>'error', 'msg'=>'Video excede 5 minutos (máx 5:00)']);
     }
 
     $mirror = isset($_POST['mirrorMode']) && $_POST['mirrorMode'] === 'true';
     
-    // TÍTULO: Mayúsculas (preservando emojis)
+    // Procesar título
     $title = mb_strtoupper($title, 'UTF-8');
-    // Solo limpiamos caracteres de control, mantenemos emojis y unicode
     $title = preg_replace('/[\x00-\x1F\x7F]/u', '', $title);
-    $title = preg_replace('/\s+/', ' ', $title);
+    $title = preg_replace('/\s+/', ' ', trim($title));
+    
+    // Separar texto y emojis
+    $parsed = separateEmojis($title);
+    $textOnly = $parsed['text'];
+    $emojiString = $parsed['emojiString'];
+    $hasEmojis = !empty($parsed['emojis']);
+
+    // Anti-fingerprint values
+    $af = getAntiFingerprint();
 
     // ---------------------------------------------------------
-    // CONFIGURACIÓN DE LAYOUT
+    // CALCULAR LAYOUT RESPONSIVE
     // ---------------------------------------------------------
-    $cw = 720; $ch = 1280;
+    // Canvas de salida: 720x1280 (9:16 vertical)
+    $cw = 720; 
+    $ch = 1280;
     
-    // Wordwrap compatible con emojis
-    $titleLen = mb_strlen($title, 'UTF-8');
+    // Determinar orientación del video original
+    $isVertical = ($videoHeight > $videoWidth);
+    $isSquare = (abs($videoWidth - $videoHeight) < 50);
+    $isHorizontal = ($videoWidth > $videoHeight);
+    
+    // Wordwrap del texto
+    $maxChars = 18;
+    $titleLen = mb_strlen($textOnly, 'UTF-8');
     $lines = [];
-    if ($titleLen <= 18) {
-        $lines[] = $title;
+    
+    if ($titleLen <= $maxChars) {
+        $lines[] = $textOnly;
     } else {
-        // Dividir por palabras respetando emojis
-        $words = preg_split('/\s+/u', $title);
+        $words = preg_split('/\s+/u', $textOnly);
         $currentLine = '';
         foreach ($words as $word) {
             $testLine = $currentLine ? "$currentLine $word" : $word;
-            if (mb_strlen($testLine, 'UTF-8') <= 18) {
+            if (mb_strlen($testLine, 'UTF-8') <= $maxChars) {
                 $currentLine = $testLine;
             } else {
                 if ($currentLine) $lines[] = $currentLine;
@@ -161,105 +224,155 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($currentLine) $lines[] = $currentLine;
     }
     
-    // Máximo 2 líneas
     if (count($lines) > 2) {
         $lines = array_slice($lines, 0, 2);
-        $lines[1] = mb_substr($lines[1], 0, 15, 'UTF-8') . '..';
+        $lines[1] = mb_substr($lines[1], 0, 14, 'UTF-8') . '..';
     }
+    
+    // Añadir emojis a la primera línea si hay espacio, o como línea separada visual
+    $emojiLine = $emojiString;
     
     $numLines = count($lines);
-    $txtSize = ($numLines == 1) ? 72 : 64;
-    $txtY = ($numLines == 1) ? [40] : [30, 100];
-    $vidY = ($numLines == 1) ? 130 : 190;
+    $txtSize = ($numLines == 1) ? 68 : 60;
+    $emojiSize = 56;
+    
+    // Posiciones Y del texto
+    $txtY = ($numLines == 1) ? [45] : [35, 105];
+    $emojiY = ($numLines == 1) ? 120 : 175;
+    
+    // Posición Y del video (debajo del texto y emojis)
+    $vidY = $hasEmojis ? ($emojiY + 70) : (($numLines == 1) ? 130 : 185);
 
     // ---------------------------------------------------------
-    // PASO 1: VIDEO + TEXTO + LOGO
-    // Usamos archivo de filtro para evitar problemas de escape
+    // CONSTRUIR FILTROS DE VIDEO (ANTI-FINGERPRINT)
     // ---------------------------------------------------------
     $fFile = str_replace('\\', '/', realpath($fontPath));
+    $emojiFont = $hasEmojiFont ? str_replace('\\', '/', realpath($emojiFontPath)) : $fFile;
     
-    $fc = "";
     $hflip = $mirror ? ",hflip" : "";
     
-    // Fondo + Video
-    $fc .= "color=c=#080808:s={$cw}x{$ch}[bg];";
-    $fc .= "[0:v]scale={$cw}:-1,setsar=1{$hflip},eq=saturation=1.15:contrast=1.05[vid];";
+    // Calcular escala del video para que quepa en el canvas
+    // El video se escala para ocupar el ancho completo (720px)
+    // y se posiciona verticalmente según el espacio disponible
+    
+    $fc = "";
+    
+    // 1. FONDO con gradiente sutil (más interesante que color sólido)
+    $fc .= "color=c=#0a0a0a:s={$cw}x{$ch}[bg0];";
+    $fc .= "[bg0]drawbox=x=0:y=0:w={$cw}:h=200:color=#111111@0.5:t=fill[bg];";
+    
+    // 2. VIDEO: Escalar, aplicar efectos anti-fingerprint
+    // setpts cambia velocidad, eq cambia colores, hue rota colores
+    $fc .= "[0:v]scale={$cw}:-1:flags=lanczos,setsar=1{$hflip},";
+    // Velocidad sutil
+    $fc .= "setpts=" . (1/$af['speed']) . "*PTS,";
+    // Efectos de color (anti-fingerprint)
+    $fc .= "eq=saturation={$af['saturation']}:contrast={$af['contrast']}:brightness={$af['brightness']}:gamma={$af['gamma']},";
+    // Hue shift sutil
+    $fc .= "hue=h={$af['hue']},";
+    // Noise muy sutil (cambia hash)
+    $fc .= "noise=alls={$af['noise']}:allf=t,";
+    // Zoom muy sutil con crop y scale
+    $fc .= "scale=iw*{$af['zoom']}:ih*{$af['zoom']},crop={$cw}:ih";
+    $fc .= "[vid];";
+    
+    // 3. OVERLAY video sobre fondo
     $fc .= "[bg][vid]overlay=0:{$vidY}:shortest=1[base];";
     
-    // Texto con soporte UTF-8/Emojis
+    // 4. TEXTO (sin emojis)
     $last = "[base]";
-    foreach ($lines as $k => $l) {
-        $escapedLine = escapeFFmpegText($l);
-        $y = $txtY[$k];
-        // Usamos textfile para mejor compatibilidad con emojis, pero inline funciona si la fuente soporta
-        $fc .= "{$last}drawtext=fontfile='{$fFile}':text='{$escapedLine}':fontcolor=#FFD700:fontsize={$txtSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y={$y}[t{$k}];";
-        $last = "[t{$k}]";
+    if (!empty($textOnly)) {
+        foreach ($lines as $k => $l) {
+            $escapedLine = escapeFFmpegText($l);
+            $y = $txtY[$k];
+            $fc .= "{$last}drawtext=fontfile='{$fFile}':text='{$escapedLine}':fontcolor=#FFD700:fontsize={$txtSize}:";
+            $fc .= "borderw=4:bordercolor=black:shadowcolor=black@0.6:shadowx=3:shadowy=3:";
+            $fc .= "x=(w-text_w)/2:y={$y}[t{$k}];";
+            $last = "[t{$k}]";
+        }
     }
     
-    // Logo
+    // 5. EMOJIS (con fuente especial si existe)
+    if ($hasEmojis) {
+        $escapedEmoji = escapeFFmpegText($emojiString);
+        $fc .= "{$last}drawtext=fontfile='{$emojiFont}':text='{$escapedEmoji}':fontsize={$emojiSize}:";
+        $fc .= "x=(w-text_w)/2:y={$emojiY}[temoji];";
+        $last = "[temoji]";
+    }
+    
+    // 6. LOGO
     $fc .= "[1:v]scale=-1:80[lg];{$last}[lg]overlay=30:H-120[vfin]";
 
-    // Guardar filtro en archivo (evita problemas de shell con emojis)
-    file_put_contents($filterFile, $fc);
-    chmod($filterFile, 0644);
-
+    // Inputs
     $inputs = "-i " . escapeshellarg($inputFile) . " -i " . escapeshellarg($logoPath);
 
-    // Comando 1: Video (usando filter_script para emojis)
-    $cmdStep1 = "$ffmpegPath -y $inputs -filter_complex_script " . escapeshellarg($filterFile) . " -map \"[vfin]\" -an -c:v libx264 -preset medium -threads 2 -crf 23 -movflags +faststart " . escapeshellarg($tempVideo);
+    // Comando 1: Video (sin audio)
+    $cmdStep1 = "$ffmpegPath -y $inputs -filter_complex \"{$fc}\" -map \"[vfin]\" -an ";
+    $cmdStep1 .= "-c:v libx264 -preset medium -threads 2 -crf 23 -movflags +faststart ";
+    $cmdStep1 .= "-metadata title=\"Generated " . date('Y-m-d H:i:s') . " - ID:$jobId\" "; // Metadata única
+    $cmdStep1 .= escapeshellarg($tempVideo);
 
     // ---------------------------------------------------------
-    // PASO 2: AUDIO EN LOOP CON VOLUMEN ALTO
-    // Subimos el volumen de la música de fondo a 0.6 (era 0.15)
+    // PASO 2: AUDIO (con tempo ajustado para compensar velocidad)
     // ---------------------------------------------------------
     $cmdStep2 = "$ffmpegPath -y -i " . escapeshellarg($tempVideo) . " -i " . escapeshellarg($inputFile) . " -stream_loop -1 -i " . escapeshellarg($audioPath);
     
-    // VOLUMEN AJUSTADO:
-    // - Audio original del video: 0.8 (ligeramente reducido para que no tape la música)
-    // - Música de fondo (news.mp3): 0.6 (SUBIDO de 0.15)
-    $filterAudio = "[1:a]aresample=async=1,volume=0.8[vorig];[2:a]aresample=async=1,volume=0.6[vmusic];[vorig][vmusic]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[afin]";
+    // Audio original ajustado a la nueva velocidad + música de fondo
+    // atempo compensa el cambio de velocidad del video
+    $atempo = round(1 / $af['speed'], 4);
+    $filterAudio = "[1:a]aresample=async=1,atempo={$atempo},volume=0.75[vorig];";
+    $filterAudio .= "[2:a]aresample=async=1,volume=0.4[vmusic];"; // VOLUMEN 0.4 como pediste
+    $filterAudio .= "[vorig][vmusic]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[afin]";
     
-    $cmdStep2 .= " -filter_complex \"$filterAudio\" -map 0:v -map \"[afin]\" -c:v copy -c:a aac -b:a 192k " . escapeshellarg($outputFile);
+    $cmdStep2 .= " -filter_complex \"$filterAudio\" -map 0:v -map \"[afin]\" -c:v copy -c:a aac -b:a 192k ";
+    $cmdStep2 .= "-metadata comment=\"Unique ID: $jobId\" "; // Más metadata única
+    $cmdStep2 .= escapeshellarg($outputFile);
 
     // Guardar Estado
     file_put_contents($jobFile, json_encode([
         'status' => 'processing',
         'file' => $outputFileName,
         'start' => time(),
-        'duration' => $seconds
-    ]));
+        'duration' => $seconds,
+        'antifingerprint' => $af,
+        'dimensions' => "{$videoWidth}x{$videoHeight}"
+    ], JSON_UNESCAPED_UNICODE));
 
     // SCRIPT BASH
     $scriptContent = "#!/bin/bash\n";
-    $scriptContent .= "export LANG=en_US.UTF-8\n"; // Soporte UTF-8
+    $scriptContent .= "export LANG=en_US.UTF-8\n";
     $scriptContent .= "export LC_ALL=en_US.UTF-8\n";
     $scriptContent .= "cd " . escapeshellarg($baseDir) . "\n";
-    $scriptContent .= "echo '=== INICIO: '\$(date)' ===' >> " . escapeshellarg($logFile) . " 2>&1\n";
-    $scriptContent .= "echo 'Duracion del video: {$seconds}s' >> " . escapeshellarg($logFile) . " 2>&1\n";
-    $scriptContent .= "echo 'PASO 1: Video + Texto + Logo...' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo '========================================' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo 'JOB: $jobId' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo 'INICIO: '\$(date) >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo 'Duracion: {$seconds}s | Dimensiones: {$videoWidth}x{$videoHeight}' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo 'Anti-FP: speed={$af['speed']} sat={$af['saturation']} cont={$af['contrast']} hue={$af['hue']}' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo '----------------------------------------' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo 'PASO 1: Video + Texto + Logo + Efectos...' >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= $cmdStep1 . " >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= "STEP1=\$?\n";
     $scriptContent .= "if [ \$STEP1 -eq 0 ]; then\n";
-    $scriptContent .= "  echo 'PASO 2: Audio en loop (vol 0.6)...' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "  echo 'PASO 2: Audio (vol 0.4) + Tempo sync...' >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= "  " . $cmdStep2 . " >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= "  STEP2=\$?\n";
     $scriptContent .= "  if [ \$STEP2 -eq 0 ]; then\n";
-    $scriptContent .= "    echo 'EXITO: Video generado' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "    SIZE=\$(du -h " . escapeshellarg($outputFile) . " | cut -f1)\n";
+    $scriptContent .= "    echo 'EXITO: '\$SIZE >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= "  else\n";
-    $scriptContent .= "    echo 'ERROR en paso 2 (codigo: '\$STEP2')' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "    echo 'ERROR PASO 2 (code: '\$STEP2')' >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= "  fi\n";
     $scriptContent .= "else\n";
-    $scriptContent .= "  echo 'ERROR en paso 1 (codigo: '\$STEP1')' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "  echo 'ERROR PASO 1 (code: '\$STEP1')' >> " . escapeshellarg($logFile) . " 2>&1\n";
     $scriptContent .= "fi\n";
     $scriptContent .= "rm -f " . escapeshellarg($tempVideo) . "\n";
-    $scriptContent .= "rm -f " . escapeshellarg($filterFile) . "\n";
-    $scriptContent .= "echo '=== FIN: '\$(date)' ===' >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo 'FIN: '\$(date) >> " . escapeshellarg($logFile) . " 2>&1\n";
+    $scriptContent .= "echo '========================================' >> " . escapeshellarg($logFile) . " 2>&1\n";
 
     file_put_contents($scriptFile, $scriptContent);
     chmod($scriptFile, 0755);
 
-    $fullCommand = "nohup nice -n 19 bash " . escapeshellarg($scriptFile) . " > /dev/null 2>&1 &";
-    exec($fullCommand);
+    exec("nohup nice -n 19 bash " . escapeshellarg($scriptFile) . " > /dev/null 2>&1 &");
 
     sendJson(['status' => 'success', 'jobId' => $jobId]);
 }
@@ -277,20 +390,17 @@ if ($action === 'status') {
 
         if (!empty($data['file']) && file_exists($fullPath) && filesize($fullPath) > 10000) {
             clearstatcache(true, $fullPath);
-            $lastMod = filemtime($fullPath);
-            if ((time() - $lastMod) > 5) {
+            if ((time() - filemtime($fullPath)) > 5) {
                 sendJson(['status' => 'finished', 'file' => $data['file']]);
             }
         }
         
-        // Timeout: 4x duración + 5 min buffer (para videos de 5 min)
         $timeout = max(600, ($data['duration'] * 4) + 300);
         if ((time() - $data['start']) > $timeout) { 
-            sendJson(['status' => 'error', 'msg' => 'Timeout después de ' . round($timeout/60) . ' minutos. Revisa ?action=debug']);
+            sendJson(['status' => 'error', 'msg' => 'Timeout. Revisa ?action=debug']);
         }
 
         $elapsed = time() - $data['start'];
-        // Para videos largos, estimamos ~2.5x tiempo real
         $estimatedTotal = $data['duration'] * 2.5;
         $progress = min(99, ($elapsed / max(1, $estimatedTotal)) * 100); 
         sendJson(['status' => 'processing', 'progress' => round($progress)]);
@@ -307,7 +417,7 @@ if ($action === 'download' && isset($_GET['file'])) {
     if (file_exists($p)) {
         if (ob_get_length()) ob_clean();
         header('Content-Type: video/mp4');
-        header('Content-Disposition: attachment; filename="VIRAL_'.date('md_Hi').'.mp4"');
+        header('Content-Disposition: attachment; filename="VIRAL_'.date('md_Hi').'_'.substr(uniqid(),5).'.mp4"');
         header('Content-Length: '.filesize($p));
         readfile($p);
         exit;
@@ -317,7 +427,7 @@ if ($action === 'download' && isset($_GET['file'])) {
 if ($action === 'delete_job' && isset($_GET['file'])) {
     $f = basename($_GET['file']);
     @unlink("$processedDir/$f");
-    $jid = explode('_', $f)[0];
+    $jid = explode('_', $f)[0] . '_' . explode('_', $f)[1];
     foreach(glob("$uploadDir/{$jid}*") as $tmp) @unlink($tmp);
     foreach(glob("$jobsDir/{$jid}*") as $tmp) @unlink($tmp);
     header('Location: ?deleted');
@@ -326,29 +436,34 @@ if ($action === 'delete_job' && isset($_GET['file'])) {
 
 if ($action === 'debug') {
     header('Content-Type: text/plain; charset=utf-8');
-    echo "=== VIRAL MAKER v72 - DEBUG ===\n\n";
-    echo "FFmpeg: " . ($hasFfmpeg ? "OK ($ffmpegPath)" : "NO INSTALADO") . "\n";
-    echo "Logo (logo.png): " . ($hasLogo ? "OK (" . filesize($logoPath) . " bytes)" : "FALTA") . "\n";
-    echo "Fuente (font.ttf): " . ($hasFont ? "OK (" . filesize($fontPath) . " bytes)" : "FALTA") . "\n";
-    echo "Audio (news.mp3): " . ($hasAudio ? "OK (" . round(filesize($audioPath)/1024) . " KB)" : "FALTA") . "\n";
-    echo "Límite video: 5 minutos (300s)\n";
-    echo "Volumen música: 0.6 (60%)\n\n";
+    echo "=== VIRAL MAKER v73 - ANTI-FINGERPRINT ===\n\n";
+    echo "FFmpeg: " . ($hasFfmpeg ? "OK" : "NO") . "\n";
+    echo "Logo: " . ($hasLogo ? "OK" : "FALTA") . "\n";
+    echo "Font: " . ($hasFont ? "OK" : "FALTA") . "\n";
+    echo "Emoji Font: " . ($hasEmojiFont ? "OK (NotoColorEmoji.ttf)" : "NO (usará font.ttf)") . "\n";
+    echo "Audio: " . ($hasAudio ? "OK" : "FALTA") . "\n\n";
     
-    echo "=== JOBS ACTIVOS ===\n";
+    echo "=== ANTI-FINGERPRINT FEATURES ===\n";
+    echo "- Velocidad aleatoria (0.97-1.03x)\n";
+    echo "- Saturación variable\n";
+    echo "- Contraste variable\n";
+    echo "- Brillo variable\n";
+    echo "- Hue shift aleatorio\n";
+    echo "- Noise sutil\n";
+    echo "- Zoom sutil\n";
+    echo "- Gamma variable\n";
+    echo "- Metadata única por video\n\n";
+    
+    echo "=== JOBS ===\n";
     foreach (glob("$jobsDir/*.json") as $jf) {
         $jd = json_decode(file_get_contents($jf), true);
-        $age = time() - $jd['start'];
-        echo basename($jf) . " - " . $jd['status'] . " - {$jd['duration']}s - hace {$age}s\n";
+        echo basename($jf) . " | " . ($jd['status']??'?') . " | " . ($jd['duration']??0) . "s | " . ($jd['dimensions']??'?') . "\n";
     }
     
-    echo "\n=== LOG FFMPEG ===\n";
+    echo "\n=== LOG (últimas 80 líneas) ===\n";
     if (file_exists($logFile)) {
-        // Últimas 100 líneas
         $lines = file($logFile);
-        $lines = array_slice($lines, -100);
-        echo implode('', $lines);
-    } else {
-        echo "No hay log disponible\n";
+        echo implode('', array_slice($lines, -80));
     }
     exit;
 }
@@ -366,90 +481,134 @@ if (ob_get_length()) ob_end_clean();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Viral Maker v72</title>
+    <title>Viral Maker v73 - Anti-Fingerprint</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Anton&display=swap" rel="stylesheet">
     <style>
-        body { background: #050505; color: #fff; font-family: sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        .card { background: #121212; border: 1px solid #333; max-width: 500px; width: 100%; padding: 30px; border-radius: 20px; box-shadow: 0 0 60px rgba(255, 215, 0, 0.05); }
-        h2 { font-family: 'Anton', sans-serif; letter-spacing: 1px; }
-        .form-control { background: #000 !important; color: #FFD700 !important; border: 1px solid #333; text-align: center; border-radius: 10px; padding: 15px; text-transform: uppercase; }
-        .form-control::placeholder { text-transform: none; color: #666; }
-        .form-control:focus { border-color: #FFD700; box-shadow: none; }
-        .btn-go { width: 100%; padding: 15px; background: #FFD700; color: #000; font-family: 'Anton'; font-size: 1.5rem; border: none; border-radius: 10px; margin-top: 15px; transition: all 0.3s; }
-        .btn-go:hover { background: #ffed4a; transform: scale(1.02); }
-        .btn-go:disabled { background: #444; color: #222; cursor: not-allowed; transform: none; }
+        * { box-sizing: border-box; }
+        body { background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%); color: #fff; font-family: 'Segoe UI', sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .card { background: rgba(18, 18, 18, 0.95); border: 1px solid #333; max-width: 520px; width: 100%; padding: 35px; border-radius: 24px; box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 100px rgba(255, 215, 0, 0.03); }
+        h2 { font-family: 'Anton', sans-serif; letter-spacing: 2px; font-size: 2rem; }
+        .subtitle { color: #888; font-size: 0.75rem; letter-spacing: 1px; }
+        .form-control { background: #0a0a0a !important; color: #FFD700 !important; border: 2px solid #222; text-align: center; border-radius: 12px; padding: 16px; font-size: 1rem; transition: all 0.3s; }
+        .form-control:focus { border-color: #FFD700; box-shadow: 0 0 20px rgba(255, 215, 0, 0.15); }
+        .form-control::placeholder { color: #555; }
+        .btn-go { width: 100%; padding: 18px; background: linear-gradient(135deg, #FFD700 0%, #ff8c00 100%); color: #000; font-family: 'Anton'; font-size: 1.4rem; letter-spacing: 1px; border: none; border-radius: 12px; margin-top: 20px; transition: all 0.3s; cursor: pointer; }
+        .btn-go:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(255, 215, 0, 0.3); }
+        .btn-go:disabled { background: #333; color: #666; cursor: not-allowed; transform: none; }
         .hidden { display: none; }
-        video { width: 100%; border-radius: 10px; margin-top: 20px; border: 1px solid #333; }
-        .progress { height: 8px; background: #222; margin-top: 20px; border-radius: 4px; overflow: hidden; }
-        .progress-bar { background: linear-gradient(90deg, #FFD700, #ff8c00); transition: width 0.5s; }
-        .file-info { font-size: 0.8rem; color: #888; margin-top: 5px; }
-        .alert-missing { background: #2a1a1a; border: 1px solid #ff4444; color: #ff8888; font-size: 0.85rem; }
-        .char-count { font-size: 0.75rem; color: #666; text-align: right; margin-top: 2px; }
+        video { width: 100%; border-radius: 12px; margin-top: 20px; border: 2px solid #333; }
+        .progress { height: 10px; background: #1a1a1a; margin-top: 25px; border-radius: 5px; overflow: hidden; }
+        .progress-bar { background: linear-gradient(90deg, #FFD700, #ff8c00, #FFD700); background-size: 200% 100%; animation: shimmer 2s infinite; }
+        @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+        .file-info { font-size: 0.8rem; color: #666; margin-top: 8px; line-height: 1.6; }
+        .alert-missing { background: rgba(255, 68, 68, 0.1); border: 1px solid #ff4444; color: #ff8888; font-size: 0.85rem; border-radius: 12px; padding: 15px; }
+        .char-count { font-size: 0.7rem; color: #555; }
         .char-count.warning { color: #ff8800; }
         .char-count.danger { color: #ff4444; }
-        .duration-warning { color: #ff8800; font-size: 0.8rem; }
-        .duration-ok { color: #44ff44; font-size: 0.8rem; }
-        .emoji-hint { font-size: 0.7rem; color: #555; margin-top: 3px; }
+        .duration-warning { color: #ff8800; }
+        .duration-ok { color: #00ff88; }
+        .badge-feature { display: inline-block; background: rgba(255, 215, 0, 0.1); color: #FFD700; font-size: 0.65rem; padding: 3px 8px; border-radius: 20px; margin: 2px; }
+        .features-row { margin-top: 10px; text-align: center; }
+        .form-check-input:checked { background-color: #FFD700; border-color: #FFD700; }
+        .emoji-picker { font-size: 1.2rem; cursor: pointer; user-select: none; }
+        .emoji-picker span { margin: 0 3px; transition: transform 0.2s; display: inline-block; }
+        .emoji-picker span:hover { transform: scale(1.3); }
     </style>
 </head>
 <body>
 
 <div class="card">
     <div class="text-center mb-4">
-        <h2>VIRAL MAKER <span class="text-warning">v72</span></h2>
-        <p class="text-secondary small">EMOJIS ✨ • AUDIO ALTO 🔊 • HASTA 5 MIN</p>
+        <h2>VIRAL MAKER <span class="text-warning">v73</span></h2>
+        <p class="subtitle">ANTI-FINGERPRINT • ANTI-DETECCIÓN • MONETIZACIÓN SAFE</p>
+        <div class="features-row">
+            <span class="badge-feature">🎬 Hash Único</span>
+            <span class="badge-feature">⚡ Velocidad Variable</span>
+            <span class="badge-feature">🎨 Colores Aleatorios</span>
+            <span class="badge-feature">🔊 Audio 0.4</span>
+        </div>
     </div>
 
     <div id="uiInput">
         <?php if(!$hasFfmpeg): ?>
             <div class="alert alert-danger">⚠️ FFMPEG NO INSTALADO</div>
         <?php elseif(!empty($missingFiles)): ?>
-            <div class="alert alert-missing">
+            <div class="alert-missing">
                 <strong>⚠️ Archivos faltantes:</strong><br>
                 <?php foreach($missingFiles as $mf): ?>
                     • <?= htmlspecialchars($mf) ?><br>
                 <?php endforeach; ?>
-                <small class="d-block mt-2">Sube estos archivos a la misma carpeta del script.</small>
             </div>
         <?php else: ?>
-            <input type="text" id="tIn" class="form-control mb-1" placeholder="TÍTULO CON EMOJIS 🔥✨" maxlength="40" required>
-            <div class="d-flex justify-content-between">
-                <span class="emoji-hint">Puedes usar emojis 🎬🔥✨💰</span>
-                <span id="charCount" class="char-count">0 / 40</span>
+            <div class="mb-3">
+                <input type="text" id="tIn" class="form-control" placeholder="TÍTULO OBLIGATORIO" maxlength="45">
+                <div class="d-flex justify-content-between mt-1 px-1">
+                    <div class="emoji-picker">
+                        <span onclick="addEmoji('🔥')">🔥</span>
+                        <span onclick="addEmoji('✨')">✨</span>
+                        <span onclick="addEmoji('💰')">💰</span>
+                        <span onclick="addEmoji('🚀')">🚀</span>
+                        <span onclick="addEmoji('💎')">💎</span>
+                        <span onclick="addEmoji('⚡')">⚡</span>
+                        <span onclick="addEmoji('🎯')">🎯</span>
+                        <span onclick="addEmoji('👑')">👑</span>
+                    </div>
+                    <span id="charCount" class="char-count">0/45</span>
+                </div>
             </div>
             
-            <input type="file" id="fIn" class="form-control mb-2 mt-3" accept="video/*" required>
+            <input type="file" id="fIn" class="form-control mb-2" accept="video/*">
             <div id="fileInfo" class="file-info text-center"></div>
             
             <div class="form-check form-switch d-flex justify-content-center gap-2 mt-3">
                 <input class="form-check-input" type="checkbox" id="mirrorCheck">
-                <label class="form-check-label text-secondary">Modo Espejo</label>
+                <label class="form-check-label text-secondary" for="mirrorCheck">Modo Espejo (flip horizontal)</label>
             </div>
 
-            <button id="btnGo" class="btn-go" onclick="process()" disabled>🎬 RENDERIZAR</button>
-            <p class="text-center text-secondary small mt-2">Máximo 5 minutos • Título en MAYÚSCULAS</p>
+            <button id="btnGo" class="btn-go" onclick="process()" disabled>
+                🎬 CREAR VIDEO VIRAL
+            </button>
+            
+            <p class="text-center text-secondary small mt-3 mb-0">
+                Máximo 5 minutos • Título en MAYÚSCULAS<br>
+                <span class="text-warning">Cada video genera un hash único</span>
+            </p>
+            
+            <?php if(!$hasEmojiFont): ?>
+            <p class="text-center small mt-2 mb-0" style="color:#665500">
+                💡 Tip: Sube NotoColorEmoji.ttf para emojis en color
+            </p>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
 
     <div id="uiProcess" class="hidden text-center">
-        <div class="spinner-border text-warning mb-3"></div>
-        <h4>PROCESANDO...</h4>
-        <p class="text-secondary small" id="processInfo">
-            Paso 1: Video + Texto + Logo<br>
-            Paso 2: Audio en Loop 🔊
+        <div class="spinner-border text-warning mb-3" style="width: 3rem; height: 3rem;"></div>
+        <h4>PROCESANDO VIDEO</h4>
+        <p class="text-secondary small">
+            Aplicando efectos anti-fingerprint...<br>
+            <span class="text-warning">Cada video es único</span>
         </p>
         <div class="progress">
             <div id="progressBar" class="progress-bar" style="width: 0%"></div>
         </div>
-        <div id="progressText" class="small text-muted mt-2">0%</div>
+        <div id="progressText" class="mt-2" style="color: #FFD700; font-size: 1.2rem; font-weight: bold;">0%</div>
         <div id="timeEstimate" class="small text-muted mt-1"></div>
     </div>
 
     <div id="uiResult" class="hidden text-center">
         <div id="videoContainer"></div>
-        <a id="dlLink" class="btn btn-success w-100 mt-3 py-3 fw-bold">⬇️ DESCARGAR VIDEO</a>
-        <button onclick="location.reload()" class="btn btn-outline-secondary w-100 mt-2">🎬 NUEVO VIDEO</button>
+        <a id="dlLink" class="btn btn-success w-100 mt-3 py-3 fw-bold" style="font-size: 1.1rem;">
+            ⬇️ DESCARGAR VIDEO ÚNICO
+        </a>
+        <button onclick="location.reload()" class="btn btn-outline-warning w-100 mt-2">
+            🎬 CREAR OTRO VIDEO
+        </button>
+        <p class="text-center small text-muted mt-2 mb-0">
+            ✓ Hash único generado<br>
+            ✓ Listo para subir a Facebook/TikTok
+        </p>
     </div>
 </div>
 
@@ -461,26 +620,31 @@ const charCount = document.getElementById('charCount');
 const fileInfo = document.getElementById('fileInfo');
 
 let videoDuration = 0;
-const MAX_DURATION = 300; // 5 minutos
+const MAX_DURATION = 300;
+
+function addEmoji(emoji) {
+    if (titleInput.value.length < 43) {
+        titleInput.value += emoji;
+        titleInput.dispatchEvent(new Event('input'));
+        titleInput.focus();
+    }
+}
 
 function validateForm() {
     const hasTitle = titleInput && titleInput.value.trim().length > 0;
     const hasFile = fileInput && fileInput.files.length > 0;
     const validDuration = videoDuration <= MAX_DURATION || videoDuration === 0;
-    
-    if (btnGo) {
-        btnGo.disabled = !(hasTitle && hasFile && validDuration);
-    }
+    if (btnGo) btnGo.disabled = !(hasTitle && hasFile && validDuration);
 }
 
 if (titleInput) {
     titleInput.addEventListener('input', function() {
-        // Contar caracteres (los emojis cuentan como 1-2)
+        this.value = this.value.toUpperCase();
         const len = [...this.value].length;
-        charCount.textContent = len + ' / 40';
+        charCount.textContent = len + '/45';
         charCount.className = 'char-count';
-        if (len > 32) charCount.classList.add('warning');
-        if (len > 38) charCount.classList.add('danger');
+        if (len > 35) charCount.classList.add('warning');
+        if (len > 42) charCount.classList.add('danger');
         validateForm();
     });
 }
@@ -490,37 +654,30 @@ if (fileInput) {
         const file = e.target.files[0];
         if (file) {
             const sizeMB = (file.size / (1024*1024)).toFixed(1);
-            
-            // Obtener duración del video
             const video = document.createElement('video');
             video.preload = 'metadata';
             video.onloadedmetadata = function() {
                 videoDuration = video.duration;
-                URL.revokeObjectURL(video.src);
-                
                 const mins = Math.floor(videoDuration / 60);
                 const secs = Math.floor(videoDuration % 60);
                 const durText = `${mins}:${secs.toString().padStart(2, '0')}`;
+                const dimText = `${video.videoWidth}x${video.videoHeight}`;
                 
                 if (videoDuration > MAX_DURATION) {
-                    fileInfo.innerHTML = `📁 ${file.name}<br>
-                        <span class="duration-warning">⚠️ Duración: ${durText} (máx 5:00)</span><br>
-                        Tamaño: ${sizeMB} MB`;
+                    fileInfo.innerHTML = `📁 ${file.name}<br><span class="duration-warning">⚠️ ${durText} (máx 5:00)</span> | ${dimText} | ${sizeMB} MB`;
                 } else {
-                    fileInfo.innerHTML = `📁 ${file.name}<br>
-                        <span class="duration-ok">✓ Duración: ${durText}</span><br>
-                        Tamaño: ${sizeMB} MB`;
+                    fileInfo.innerHTML = `📁 ${file.name}<br><span class="duration-ok">✓ ${durText}</span> | ${dimText} | ${sizeMB} MB`;
                 }
+                URL.revokeObjectURL(video.src);
                 validateForm();
             };
             video.onerror = function() {
-                fileInfo.innerHTML = `📁 ${file.name}<br>Tamaño: ${sizeMB} MB`;
+                fileInfo.innerHTML = `📁 ${file.name} | ${sizeMB} MB`;
                 videoDuration = 0;
                 validateForm();
             };
             video.src = URL.createObjectURL(file);
         }
-        validateForm();
     });
 }
 
@@ -530,7 +687,7 @@ async function process() {
     
     if (!title) return alert("El título es obligatorio");
     if (!file) return alert("Selecciona un video");
-    if (videoDuration > MAX_DURATION) return alert("El video excede 5 minutos");
+    if (videoDuration > MAX_DURATION) return alert("Video excede 5 minutos");
 
     document.getElementById('uiInput').classList.add('hidden');
     document.getElementById('uiProcess').classList.remove('hidden');
@@ -544,11 +701,12 @@ async function process() {
         let res = await fetch('?action=upload', { method: 'POST', body: fd });
         let text = await res.text();
         
+        let data;
         try {
-            var data = JSON.parse(text);
+            data = JSON.parse(text);
         } catch(e) {
-            console.error("Respuesta:", text);
-            throw new Error("Error del servidor. Revisa ?action=debug");
+            console.error("Response:", text);
+            throw new Error("Error del servidor");
         }
         
         if (data.status === 'error') {
@@ -596,9 +754,7 @@ function track(id) {
                     timeEst.innerText = `≈ ${mins}m ${secs}s restantes`;
                 }
             }
-        } catch(e) {
-            console.log("Verificando...");
-        }
+        } catch(e) {}
     }, 3000);
 }
 
