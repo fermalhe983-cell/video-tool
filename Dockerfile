@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Configurar y compilar la extensión GD con soporte completo
+# Configurar y compilar la extensión GD
 RUN docker-php-ext-configure gd \
     --with-freetype \
     --with-jpeg \
@@ -19,12 +19,21 @@ RUN docker-php-ext-configure gd \
 # Habilitar mod_rewrite de Apache
 RUN a2enmod rewrite
 
-# Configurar PHP para uploads grandes y ejecución prolongada
-RUN echo "memory_limit = 2048M" >> /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "upload_max_filesize = 2048M" >> /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "post_max_size = 2048M" >> /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "max_execution_time = 0" >> /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "max_input_time = -1" >> /usr/local/etc/php/conf.d/uploads.ini
+# Configurar PHP para debugging y uploads grandes
+RUN { \
+    echo "memory_limit = 2048M"; \
+    echo "upload_max_filesize = 2048M"; \
+    echo "post_max_size = 2048M"; \
+    echo "max_execution_time = 0"; \
+    echo "max_input_time = -1"; \
+    echo "display_errors = On"; \
+    echo "error_reporting = E_ALL"; \
+    echo "log_errors = On"; \
+    echo "error_log = /var/www/html/php_errors.log"; \
+    } > /usr/local/etc/php/conf.d/custom.ini
+
+# Configurar Apache para mostrar errores
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
 # Establecer directorio de trabajo
 WORKDIR /var/www/html
@@ -32,20 +41,24 @@ WORKDIR /var/www/html
 # Copiar todos los archivos del proyecto
 COPY . /var/www/html/
 
-# Crear directorios necesarios con permisos correctos
+# Crear directorios y establecer permisos
 RUN mkdir -p /var/www/html/uploads \
              /var/www/html/processed \
              /var/www/html/jobs \
              /var/www/html/assets \
+    && touch /var/www/html/ffmpeg_log.txt \
+    && touch /var/www/html/php_errors.log \
     && chown -R www-data:www-data /var/www/html \
     && chmod -R 755 /var/www/html \
     && chmod -R 777 /var/www/html/uploads \
                     /var/www/html/processed \
                     /var/www/html/jobs \
-                    /var/www/html/assets
+                    /var/www/html/assets \
+                    /var/www/html/ffmpeg_log.txt \
+                    /var/www/html/php_errors.log
 
 # Exponer puerto 80
 EXPOSE 80
 
-# Comando para iniciar Apache en primer plano
+# Comando para iniciar Apache
 CMD ["apache2-foreground"]
